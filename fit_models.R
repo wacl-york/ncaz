@@ -8,6 +8,8 @@ library(KFAS)
 library(bssm)
 library(forecast)
 
+OUTPUT_DIR <- "/mnt/shiny/ncaz"
+
 # Will imagine that this started on 15th January to allow for a few days
 # of manually updating the filter
 START_DATE <- as_date("2023-01-15")
@@ -19,7 +21,7 @@ newcastle_sites <- meta |>
 #df <- importAURN(site=newcastle_sites, year=2010:2023, data_type="hourly")
 #df <- df |>
 #        select(site, code, time=date, no2, air_temp, ws, wd)
-df <- readRDS("df.rds")
+df <- readRDS(sprintf("%s/data/training_2010_2023-01-19.rds", OUTPUT_DIR))
 
 # Average to hourly, including vector averaging of wind direction
 df_hourly <- df |>
@@ -228,8 +230,8 @@ rbind(
 mod_outer <- fit_univariate(df_hourly |> filter(code == 'NCA3', time < START_DATE ))
 filt_outer <- KFS(mod_outer)
 
-saveRDS(filt_central, "models/univariate_central.rds")
-saveRDS(filt_outer, "models/univariate_outer.rds")
+saveRDS(filt_central, sprintf("%s/models/univariate_central.rds", OUTPUT_DIR))
+saveRDS(filt_outer, sprintf("%s/models/univariate_outer.rds", OUTPUT_DIR))
 
 results_central <- update_multiple_dates(df_hourly |> filter(code == 'NEWC', time >= START_DATE), 
                                  filt_central, 
@@ -241,5 +243,5 @@ results_outer <- update_multiple_dates(df_hourly |> filter(code == 'NCA3', time 
                                  list(list(date=START_DATE - days(1),
                                            a=NULL,
                                            P=NULL)))
-saveRDS(filt_central, "models/states_univariate_central.rds")
-saveRDS(filt_outer, "models/states_univariate_outer.rds")
+saveRDS(results_central, sprintf("%s/states/univariate_central.rds", OUTPUT_DIR))
+saveRDS(results_outer, sprintf("%s/states/univariate_outer.rds", OUTPUT_DIR))
