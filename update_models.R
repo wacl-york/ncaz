@@ -52,6 +52,7 @@ for (site in names(SITES)) {
   # update states
   a_last <- this_states[[length(this_states)]]$a
   P_last <- this_states[[length(this_states)]]$P
+  detrended <- array(dim=nrow(this_df))
   for (i in 1:nrow(this_df)) {
     updated <- update_univariate(models[[site]], this_df[i, ], a_last, P_last)
     a_last <- updated$a
@@ -61,6 +62,7 @@ for (site in names(SITES)) {
       a=a_last,
       P=P_last
     )))
+    detrended[i] <- exp(a_last['level', ])
   }
   
   # Save states + results separately
@@ -68,8 +70,8 @@ for (site in names(SITES)) {
   
   df_to_save <- this_df |>
                   mutate(code = site,
-                         detrended = exp(sapply(this_states, function(x) x$a['level', ]))) |>
+                         detrended = as.numeric(detrended)) |>
                   select(time, code, no2, detrended)
-  write_csv(df_to_save, sprintf("%s/data/results.csv", OUTPUT_DIR))
+  write_csv(df_to_save, sprintf("%s/data/results.csv", OUTPUT_DIR), append = TRUE)
 } 
 
