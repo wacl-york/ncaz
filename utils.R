@@ -1,5 +1,6 @@
 INTERVENTION_DATE <- as_datetime("2023-02-01")
-OUTPUT_DIR <- "/mnt/shiny/ncaz"
+OUTPUT_DIR_FROM_SHINY <- "/mnt/shiny/ncaz"
+OUTPUT_DIR_FROM_CRON <- "/shared/storage/shiny0/ncaz"
 SITES <- list(
   NEWC=list(
     human_readable='central'

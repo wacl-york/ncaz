@@ -9,6 +9,8 @@ library(bssm)
 library(forecast)
 source("utils.R")
 
+OUTPUT_DIR <- OUTPUT_DIR_FROM_SHINY
+
 # Will imagine that this started on 15th January to allow for a few days
 # of manually updating the filter
 START_DATE <- as_date("2023-01-15")

@@ -4,6 +4,8 @@ library(openair)
 library(KFAS)
 source("utils.R")
 
+OUTPUT_DIR <- OUTPUT_DIR_FROM_CRON
+
 # get 2023 data from AURN and pre-process it accordingly (daily average correctly handling wind)
 df <- importAURN(site = c("NEWC", "NCA3"), year=2023)
 df_daily <- df |>
