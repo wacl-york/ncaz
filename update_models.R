@@ -6,29 +6,6 @@ source("utils.R")
 
 OUTPUT_DIR <- OUTPUT_DIR_FROM_CRON
 
-# get 2023 data from AURN and pre-process it accordingly (daily average correctly handling wind)
-df <- importAURN(site = c("NEWC", "NCA3"), year=2023)
-df_daily <- df |>
-  mutate(time = as_datetime(as_date(date)),
-         wind_y = ws * sin(2 * pi * wd / 360),
-         wind_x = ws * cos(2 * pi * wd / 360)) |>
-  group_by(code, time) |>
-  summarise(no2 = mean(no2, na.rm=T),
-            air_temp = mean(air_temp,na.rm=T),
-            wind_y = mean(wind_y, na.rm=T),
-            wind_x = mean(wind_x, na.rm=T),
-            ws = mean(ws, na.rm=T)) |>
-  ungroup() |>
-  # Convert vector wind back to polar
-  mutate(
-      wd = as.vector(atan2(wind_y, wind_x) * 360 / 2 / pi),
-      wd = ifelse(wd < 0, wd + 360, wd),
-      ws_vec = (wind_x ^ 2 + wind_y ^ 2) ^ 0.5,
-      wind_y_nows = sin(2 * pi * wd / 360),
-      wind_x_nows = cos(2 * pi * wd / 360),
-      intervention=as.numeric(time >= INTERVENTION_DATE)
-)
-
 # Load states
 states <- lapply(SITES, function(x) {
   readRDS(sprintf("%s/states/univariate_%s.rds",
@@ -47,9 +24,10 @@ for (site in names(SITES)) {
   # get most recent date and data to update with
   this_states <- states[[site]]
   last_update <- this_states[[length(this_states)]]$date
-  this_df <- df_daily |>
-                filter(code == site,
-                       time > last_update)
+  this_df <- load_data(site) |>
+                filter(time > last_update)
+
+  if (nrow(this_df) == 0) next
   
   # update states
   a_last <- this_states[[length(this_states)]]$a

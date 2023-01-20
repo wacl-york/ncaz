@@ -10,6 +10,41 @@ SITES <- list(
   )
 )
 
+load_data <- function(site) {
+  tmp_fn <- "tmp.RData"
+  base_url <- sprintf("https://uk-air.defra.gov.uk/openair/R_data/%s_2023.RData", site)
+  download.file(base_url, tmp_fn, method="wget")
+  load(tmp_fn)
+  # Load hourly data
+  df <- get(sprintf("%s_2023", site)) |> 
+          as_tibble() |>
+          mutate(date = as_datetime(date)) |>
+          select(site, code, date, no2=NO2, air_temp=temp, ws, wd)
+  file.remove(tmp_fn)
+  
+  # Average to daily
+  df |>
+    mutate(time = as_datetime(as_date(date)),
+           wind_y = ws * sin(2 * pi * wd / 360),
+           wind_x = ws * cos(2 * pi * wd / 360)) |>
+    group_by(code, time) |>
+    summarise(no2 = mean(no2, na.rm=T),
+              air_temp = mean(air_temp,na.rm=T),
+              wind_y = mean(wind_y, na.rm=T),
+              wind_x = mean(wind_x, na.rm=T),
+              ws = mean(ws, na.rm=T)) |>
+    ungroup() |>
+    # Convert vector wind back to polar
+    mutate(
+        wd = as.vector(atan2(wind_y, wind_x) * 360 / 2 / pi),
+        wd = ifelse(wd < 0, wd + 360, wd),
+        ws_vec = (wind_x ^ 2 + wind_y ^ 2) ^ 0.5,
+        wind_y_nows = sin(2 * pi * wd / 360),
+        wind_x_nows = cos(2 * pi * wd / 360),
+        intervention=as.numeric(time >= INTERVENTION_DATE)
+  )
+}
+
 update_univariate <- function(model, newdata, alpha=NULL, P=NULL) {
   if (is.null(P)) {
     P <- model$P[, , model$dims$n+1]
