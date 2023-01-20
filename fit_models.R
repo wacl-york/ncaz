@@ -19,9 +19,6 @@ newcastle_sites <- meta |>
           filter(grepl("Newcastle", site)) |>
           pull(code)
         
-#df <- importAURN(site=newcastle_sites, year=2010:2023, data_type="hourly")
-#df <- df |>
-#        select(site, code, time=date, no2, air_temp, ws, wd)
 df <- readRDS(sprintf("%s/data/training_2010_2023-01-19.rds", OUTPUT_DIR))
 
 # Average to hourly, including vector averaging of wind direction
@@ -175,38 +172,38 @@ rbind(
   as.numeric(t(results[[5]]$a))
 )
 
-# So fit second site, generate states up until 15th January, then manually update states
+# So fit second site, generate states up until 15th January, then manually update states using update_models.R
 mod_outer <- fit_univariate(df_daily |> filter(code == 'NCA3', time < START_DATE ))
 filt_outer <- KFS(mod_outer)
 
 saveRDS(filt_central, sprintf("%s/models/univariate_central.rds", OUTPUT_DIR))
 saveRDS(filt_outer, sprintf("%s/models/univariate_outer.rds", OUTPUT_DIR))
 
-results_central <- update_multiple_dates(df_daily |> filter(code == 'NEWC', time >= START_DATE), 
-                                 filt_central, 
-                                 list(list(date=START_DATE - days(1),
-                                           a=NULL,
-                                           P=NULL)))
-results_outer <- update_multiple_dates(df_daily |> filter(code == 'NCA3', time >= START_DATE), 
-                                 filt_outer, 
-                                 list(list(date=START_DATE - days(1),
-                                           a=NULL,
-                                           P=NULL)))
-saveRDS(results_central, sprintf("%s/states/univariate_central.rds", OUTPUT_DIR))
-saveRDS(results_outer, sprintf("%s/states/univariate_outer.rds", OUTPUT_DIR))
+# Save initial states which will pull from model later
+initial_states_central <- list(list(date=START_DATE - days(1),
+                                    a=t(t(filt_central$a[filt_central$dims$n+1, ])),
+                                    P=filt_central$P[, , filt_central$dims$n+1]))
+initial_states_outer <- list(list(date=START_DATE - days(1),
+                                    a=t(t(filt_outer$a[filt_outer$dims$n+1, ])),
+                                    P=filt_outer$P[, , filt_outer$dims$n+1]))
+    
+saveRDS(initial_states_central, sprintf("%s/states/univariate_central.rds", OUTPUT_DIR))
+saveRDS(initial_states_outer, sprintf("%s/states/univariate_outer.rds", OUTPUT_DIR))
 
 # Save data to DB
-df_to_save <- df_daily |> select(time, code, no2)
+df_to_save <- df_daily |> filter(time < START_DATE) |> select(time, code, no2)
 # Now add new states in
 df_detrended_central <- df_daily |> 
+                filter(time < START_DATE) |>
                 select(time, code) |>
                 filter(code == 'NEWC') |>
-                mutate(detrended = exp(c(filt_central$att[, 'level'], sapply(results_central[2:5], function(x) x$a['level', ]))))
+                mutate(detrended = exp(c(filt_central$att[, 'level'])))
 df_detrended_outer <- df_daily |> 
+                filter(time < START_DATE) |>
                 select(time, code) |>
                 filter(code == 'NCA3') |>
-                mutate(detrended = exp(c(filt_outer$att[, 'level'], sapply(results_outer[2:5], function(x) x$a['level', ]))))
+                mutate(detrended = exp(c(filt_outer$att[, 'level'])))
 df_to_save <- df_to_save |>
-  inner_join(df_detrended_central |> rbind(df_detrended_outer), by=c("time", "code")) 
+  inner_join(df_detrended_central |> rbind(df_detrended_outer), by=c("time", "code")) |>
+  mutate(intervention=0, intervention_var=0)
 write_csv(df_to_save, sprintf("%s/data/results.csv", OUTPUT_DIR))
-  
