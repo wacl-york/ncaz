@@ -7,8 +7,7 @@ library(openair)
 library(KFAS)
 library(bssm)
 library(forecast)
-
-OUTPUT_DIR <- "/mnt/shiny/ncaz"
+source("utils.R")
 
 # Will imagine that this started on 15th January to allow for a few days
 # of manually updating the filter
@@ -24,8 +23,8 @@ newcastle_sites <- meta |>
 df <- readRDS(sprintf("%s/data/training_2010_2023-01-19.rds", OUTPUT_DIR))
 
 # Average to hourly, including vector averaging of wind direction
-df_hourly <- df |>
-  mutate(time = as_date(time),
+df_daily <- df |>
+  mutate(time = as_datetime(as_date(time)),
          wind_y = ws * sin(2 * pi * wd / 360),
          wind_x = ws * cos(2 * pi * wd / 360)) |>
   group_by(site, code, time) |>
@@ -47,9 +46,9 @@ df_hourly <- df |>
 
 # Prep data for modelling with yearly terms
 yearly_coefs <- as_tibble(
-                          fourier(ts(df_hourly |> filter(code == 'NEWC') |> pull(time), frequency=365), K=1)) |>
-                mutate(time = df_hourly |> filter(code == 'NEWC') |> pull(time))
-df_hourly <- df_hourly |>
+                          fourier(ts(df_daily |> filter(code == 'NEWC') |> pull(time), frequency=365), K=1)) |>
+                mutate(time = df_daily |> filter(code == 'NEWC') |> pull(time))
+df_daily <- df_daily |>
   inner_join(yearly_coefs, by="time")
 
 # Firstly get priors for annual cycle
@@ -138,7 +137,7 @@ fit_univariate <- function(df, H=NA, Q=NA) {
 }
 
 # ------------- FIT MODELS FOR EACH SITE!
-df_central <- df_hourly |> filter(code == 'NEWC')
+df_central <- df_daily |> filter(code == 'NEWC')
 mod_central <- fit_univariate(df_central |> filter(time < START_DATE ))
 filt_central <- KFS(mod_central)
 
@@ -154,58 +153,6 @@ df_central |>
     geom_line(alpha=0.5)
 
 # ------------- Update states
-update_univariate <- function(model, newdata, alpha=NULL, P=NULL) {
-  if (is.null(P)) {
-    P <- model$P[, , model$dims$n+1]
-  }
-  if (is.null(alpha)) {
-    alpha <- t(t(model$a[model$dims$n+1, ]))
-  }
-  # Z Needs to handle newdata!
-  
-  Z <- array(dim=c(1, 8))
-  # Temp, ws, windx, windy, intervention, yearly-sin, yearly-cos, level
-  Z[1, 1] <- newdata$air_temp
-  Z[1, 2] <- log(newdata$ws)
-  Z[1, 3] <- cos(2 * pi * newdata$wd / 360)
-  Z[1, 4] <- sin(2 * pi * newdata$wd / 360)
-  Z[1, 5] <- ifelse(newdata$time >= as_date("2023-02-01"), 1, 0)
-  Z[1, 6] <- sin(2 * pi * (yday(newdata$time) / 365))
-  Z[1, 7] <- cos(2 * pi * (yday(newdata$time) / 365))
-  Z[1, 8] <- 1
-  
-  H <- model$model$H[, , 1]
-  # Most recent observation
-  y <- log(newdata$no2)
-  
-  # Get: P_t|t-1, alpha_t|t-1, Z_t, R_t
-  # Calculate kalman gain as:
-  K = P %*% t(Z) %*% (Z%*%P%*%t(Z) + H)^-1
-  alpha_update = alpha + K %*% (y - Z%*%alpha)
-  P_update = (diag(8) - K%*%Z) * P * t(diag(8)-K%*%Z) + K%*%H%*%t(K)
-  
-  list(
-    a=alpha_update,
-    P=P_update
-  )
-}
-
-update_multiple_dates <- function(data, model, states) {
-  a_new <- states[[length(states)]]$a
-  P_new <- states[[length(states)]]$P
-  for (i in 1:nrow(data)) {
-    updated <- update_univariate(model, data[i, ], a_new, P_new)
-    a_new <- updated$a
-    P_new <- updated$P
-    states <- append(states, list(list(
-      date=data$time[i],
-      a=a_new,
-      P=P_new
-    )))
-  }
-  states
-}
-
 # Now iterate through each day and add new matrices onto the old
 df_to_update <- df_central[which(df_central$time >= START_DATE), ]
 results <- update_multiple_dates(df_to_update, 
@@ -227,21 +174,37 @@ rbind(
 )
 
 # So fit second site, generate states up until 15th January, then manually update states
-mod_outer <- fit_univariate(df_hourly |> filter(code == 'NCA3', time < START_DATE ))
+mod_outer <- fit_univariate(df_daily |> filter(code == 'NCA3', time < START_DATE ))
 filt_outer <- KFS(mod_outer)
 
 saveRDS(filt_central, sprintf("%s/models/univariate_central.rds", OUTPUT_DIR))
 saveRDS(filt_outer, sprintf("%s/models/univariate_outer.rds", OUTPUT_DIR))
 
-results_central <- update_multiple_dates(df_hourly |> filter(code == 'NEWC', time >= START_DATE), 
+results_central <- update_multiple_dates(df_daily |> filter(code == 'NEWC', time >= START_DATE), 
                                  filt_central, 
                                  list(list(date=START_DATE - days(1),
                                            a=NULL,
                                            P=NULL)))
-results_outer <- update_multiple_dates(df_hourly |> filter(code == 'NCA3', time >= START_DATE), 
+results_outer <- update_multiple_dates(df_daily |> filter(code == 'NCA3', time >= START_DATE), 
                                  filt_outer, 
                                  list(list(date=START_DATE - days(1),
                                            a=NULL,
                                            P=NULL)))
 saveRDS(results_central, sprintf("%s/states/univariate_central.rds", OUTPUT_DIR))
 saveRDS(results_outer, sprintf("%s/states/univariate_outer.rds", OUTPUT_DIR))
+
+# Save data to DB
+df_to_save <- df_daily |> select(time, code, no2)
+# Now add new states in
+df_detrended_central <- df_daily |> 
+                select(time, code) |>
+                filter(code == 'NEWC') |>
+                mutate(detrended = exp(c(filt_central$att[, 'level'], sapply(results_central[2:5], function(x) x$a['level', ]))))
+df_detrended_outer <- df_daily |> 
+                select(time, code) |>
+                filter(code == 'NCA3') |>
+                mutate(detrended = exp(c(filt_outer$att[, 'level'], sapply(results_outer[2:5], function(x) x$a['level', ]))))
+df_to_save <- df_to_save |>
+  inner_join(df_detrended_central |> rbind(df_detrended_outer), by=c("time", "code")) 
+write_csv(df_to_save, sprintf("%s/data/results.csv", OUTPUT_DIR))
+  
