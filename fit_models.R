@@ -205,5 +205,5 @@ df_detrended_outer <- df_daily |>
                 mutate(detrended = exp(c(filt_outer$att[, 'level'])))
 df_to_save <- df_to_save |>
   inner_join(df_detrended_central |> rbind(df_detrended_outer), by=c("time", "code")) |>
-  mutate(intervention=0, intervention_var=0)
+  mutate(intervention=1, intervention_var=1)
 write_csv(df_to_save, sprintf("%s/data/results.csv", OUTPUT_DIR))
