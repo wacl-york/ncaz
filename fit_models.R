@@ -192,18 +192,21 @@ saveRDS(initial_states_outer, sprintf("%s/states/univariate_outer.rds", OUTPUT_D
 
 # Save data to DB
 df_to_save <- df_daily |> filter(time < START_DATE) |> select(time, code, no2)
+detrended_ind <- which(colnames(filt_central$att) == 'level')
 # Now add new states in
 df_detrended_central <- df_daily |> 
                 filter(time < START_DATE) |>
                 select(time, code) |>
                 filter(code == 'NEWC') |>
-                mutate(detrended = exp(c(filt_central$att[, 'level'])))
+                mutate(detrended = as.numeric(filt_central$att[, detrended_ind]),
+                       detrended_var = as.numeric(filt_central$Ptt[detrended_ind, detrended_ind, ]))
 df_detrended_outer <- df_daily |> 
                 filter(time < START_DATE) |>
                 select(time, code) |>
                 filter(code == 'NCA3') |>
-                mutate(detrended = exp(c(filt_outer$att[, 'level'])))
+                mutate(detrended = as.numeric(filt_outer$att[, detrended_ind]),
+                       detrended_var = as.numeric(filt_outer$Ptt[detrended_ind, detrended_ind, ]))
 df_to_save <- df_to_save |>
   inner_join(df_detrended_central |> rbind(df_detrended_outer), by=c("time", "code")) |>
-  mutate(intervention=1, intervention_var=1)
+  mutate(intervention=0, intervention_var=0)
 write_csv(df_to_save, sprintf("%s/data/results.csv", OUTPUT_DIR))

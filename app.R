@@ -66,12 +66,18 @@ server <- function(input, output) {
   df <- df %>%
     filter(time >= as_date("2011-01-01")) %>%
     mutate(
-      intervention_upper = intervention + 2 * sqrt(intervention_var),
-      intervention_lower = intervention - 2 * sqrt(intervention_var),
-      detrended = detrended - min(detrended),
-      bau = ifelse(time >= INTERVENTION_DATE, detrended * intervention, NA),
-      bau_lower = no2 * detrended * intervention_lower,
-      bau_upper = no2 * detrended * intervention_upper
+      detrended_abs = exp(detrended + 0.5*detrended_var),
+      detrended_sd = sqrt(detrended_abs**2 * (exp(detrended_var) - 1)),
+      intervention_abs = exp(intervention + 0.5*intervention_var),
+      intervention_sd = sqrt(intervention_abs**2 * (exp(intervention_var) - 1)),
+      detrended_abs = detrended_abs - min(detrended_abs),
+      detrended_upper = detrended_abs + 2 * detrended_sd,
+      detrended_lower = detrended_abs - 2 * detrended_sd,
+      intervention_upper = intervention_abs + 2 * intervention_sd,
+      intervention_lower = intervention_abs - 2 * intervention_sd,
+      bau = ifelse(time >= INTERVENTION_DATE, no2 - intervention_abs, NA),
+      bau_lower = bau - 2 * intervention_sd,
+      bau_upper = bau + 2 * intervention_sd
     )
   
   
@@ -81,13 +87,27 @@ server <- function(input, output) {
                 name = "Measured",
                 color = I("#1F77B4")) %>%
       add_lines(
-        y =  ~ detrended,
+        y =  ~ detrended_abs,
         name = "Detrended",
-        color = I("#FF7F04")
+        color = 'rgb(255, 127, 4)'
       ) %>%
+      add_ribbons(ymin = ~detrended_lower, 
+                 ymax = ~detrended_upper,
+                 name="Detrended +/- 2sds",
+                 line = list(color='rgba(255, 127, 4, 0)'),
+                 fillcolor = 'rgba(255, 127, 4, 0.2)',
+                 showlegend=FALSE
+                 ) %>%
       add_lines(y =  ~ bau,
                 name = "Business-as-usual",
                 color = I("#2CA02C")) %>%
+      add_ribbons(ymin = ~bau_lower, 
+                 ymax = ~bau_upper,
+                 name="BAU +/- 2sds",
+                 line = list(color='rgba(44, 160, 44, 0)'),
+                 fillcolor = 'rgba(44, 160, 44, 0.2)',
+                 showlegend=FALSE
+                 ) %>%
       layout(xaxis = list(range = c(
         today() - months(3), today()
       )),
@@ -112,17 +132,31 @@ server <- function(input, output) {
         showlegend = FALSE
       ) %>%
       add_lines(
-        y =  ~ detrended,
-        color = I("#FF7F04"),
+        y =  ~ detrended_abs,
+        color = 'rgb(255, 127, 4)',
         name = "Detrended",
         showlegend = FALSE
       ) %>%
+      add_ribbons(ymin = ~detrended_lower, 
+                 ymax = ~detrended_upper,
+                 name="Detrended +/- 2SDs",
+                 line = list(color='rgba(255, 127, 4, 0)'),
+                 fillcolor = 'rgba(255, 127, 4, 0.2)',
+                 showlegend=FALSE
+                 ) %>%
       add_lines(
         y =  ~ bau,
         color = I("#2CA02C"),
         name = "Business-as-usual",
         showlegend = FALSE
       ) %>%
+      add_ribbons(ymin = ~bau_lower, 
+                 ymax = ~bau_upper,
+                 name="BAU +/- 2sds",
+                 line = list(color='rgba(44, 160, 44, 0)'),
+                 fillcolor = 'rgba(44, 160, 44, 0.2)',
+                 showlegend=FALSE
+                 ) %>%
       layout(xaxis = list(range = c(
         today() - months(3), today()
       )),
@@ -138,7 +172,6 @@ server <- function(input, output) {
         showarrow = FALSE,
         font = list(size = 15)
       )
-    
     
     subplot(p1,
             p2,
