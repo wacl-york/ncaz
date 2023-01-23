@@ -2,59 +2,64 @@ INTERVENTION_DATE <- as_datetime("2023-02-01")
 OUTPUT_DIR_FROM_SHINY <- "/mnt/shiny/ncaz"
 OUTPUT_DIR_FROM_CRON <- "/shared/storage/shiny0/ncaz"
 SITES <- list(
-  NEWC=list(
-    human_readable='central'
-  ),
-  NCA3=list(
-    human_readable='outer'
-  )
+  NEWC = list(human_readable = 'central'),
+  NCA3 = list(human_readable = 'outer')
 )
 
 load_data <- function(site) {
   tmp_fn <- "tmp.RData"
-  base_url <- sprintf("https://uk-air.defra.gov.uk/openair/R_data/%s_2023.RData", site)
-  download.file(base_url, tmp_fn, method="wget")
+  base_url <-
+    sprintf("https://uk-air.defra.gov.uk/openair/R_data/%s_2023.RData",
+            site)
+  download.file(base_url, tmp_fn, method = "wget")
   load(tmp_fn)
   # Load hourly data
-  df <- get(sprintf("%s_2023", site)) |> 
-          as_tibble() |>
-          mutate(date = as_datetime(date)) |>
-          select(site, code, date, no2=NO2, air_temp=temp, ws, wd)
+  df <- get(sprintf("%s_2023", site)) %>%
+    as_tibble() %>%
+    mutate(date = as_datetime(date)) %>%
+    select(site, code, date, no2 = NO2, air_temp = temp, ws, wd)
   file.remove(tmp_fn)
   
   # Average to daily
-  df |>
-    mutate(time = as_datetime(as_date(date)),
-           wind_y = ws * sin(2 * pi * wd / 360),
-           wind_x = ws * cos(2 * pi * wd / 360)) |>
-    group_by(code, time) |>
-    summarise(no2 = mean(no2, na.rm=T),
-              air_temp = mean(air_temp,na.rm=T),
-              wind_y = mean(wind_y, na.rm=T),
-              wind_x = mean(wind_x, na.rm=T),
-              ws = mean(ws, na.rm=T)) |>
-    ungroup() |>
+  df %>%
+    mutate(
+      time = as_datetime(as_date(date)),
+      wind_y = ws * sin(2 * pi * wd / 360),
+      wind_x = ws * cos(2 * pi * wd / 360)
+    ) %>%
+    group_by(code, time) %>%
+    summarise(
+      no2 = mean(no2, na.rm = T),
+      air_temp = mean(air_temp, na.rm = T),
+      wind_y = mean(wind_y, na.rm = T),
+      wind_x = mean(wind_x, na.rm = T),
+      ws = mean(ws, na.rm = T)
+    ) %>%
+    ungroup() %>%
     # Convert vector wind back to polar
     mutate(
-        wd = as.vector(atan2(wind_y, wind_x) * 360 / 2 / pi),
-        wd = ifelse(wd < 0, wd + 360, wd),
-        ws_vec = (wind_x ^ 2 + wind_y ^ 2) ^ 0.5,
-        wind_y_nows = sin(2 * pi * wd / 360),
-        wind_x_nows = cos(2 * pi * wd / 360),
-        intervention=as.numeric(time >= INTERVENTION_DATE)
-  )
+      wd = as.vector(atan2(wind_y, wind_x) * 360 / 2 / pi),
+      wd = ifelse(wd < 0, wd + 360, wd),
+      ws_vec = (wind_x ^ 2 + wind_y ^ 2) ^ 0.5,
+      wind_y_nows = sin(2 * pi * wd / 360),
+      wind_x_nows = cos(2 * pi * wd / 360),
+      intervention = as.numeric(time >= INTERVENTION_DATE)
+    )
 }
 
-update_univariate <- function(model, newdata, alpha=NULL, P=NULL) {
+update_univariate <- function(model,
+                              newdata,
+                              alpha = NULL,
+                              P = NULL) {
   if (is.null(P)) {
-    P <- model$P[, , model$dims$n+1]
+    P <- model$P[, , model$dims$n + 1]
   }
   if (is.null(alpha)) {
-    alpha <- t(t(model$a[model$dims$n+1, ]))
+    alpha <- t(t(model$a[model$dims$n + 1,]))
   }
   # Z Needs to handle newdata!
   
-  Z <- array(dim=c(1, 8))
+  Z <- array(dim = c(1, 8))
   # Temp, ws, windx, windy, intervention, yearly-sin, yearly-cos, level
   Z[1, 1] <- newdata$air_temp
   Z[1, 2] <- log(newdata$ws)
@@ -71,27 +76,26 @@ update_univariate <- function(model, newdata, alpha=NULL, P=NULL) {
   
   # Get: P_t|t-1, alpha_t|t-1, Z_t, R_t
   # Calculate kalman gain as:
-  K = P %*% t(Z) %*% (Z%*%P%*%t(Z) + H)^-1
-  alpha_update = alpha + K %*% (y - Z%*%alpha)
-  P_update = (diag(8) - K%*%Z) * P * t(diag(8)-K%*%Z) + K%*%H%*%t(K)
+  K = P %*% t(Z) %*% (Z %*% P %*% t(Z) + H) ^ -1
+  alpha_update = alpha + K %*% (y - Z %*% alpha)
+  P_update = (diag(8) - K %*% Z) * P * t(diag(8) - K %*% Z) + K %*% H %*%
+    t(K)
   
-  list(
-    a=alpha_update,
-    P=P_update
-  )
+  list(a = alpha_update,
+       P = P_update)
 }
 
 update_multiple_dates <- function(data, model, states) {
   a_new <- states[[length(states)]]$a
   P_new <- states[[length(states)]]$P
   for (i in 1:nrow(data)) {
-    updated <- update_univariate(model, data[i, ], a_new, P_new)
+    updated <- update_univariate(model, data[i,], a_new, P_new)
     a_new <- updated$a
     P_new <- updated$P
     states <- append(states, list(list(
-      date=data$time[i],
-      a=a_new,
-      P=P_new
+      date = data$time[i],
+      a = a_new,
+      P = P_new
     )))
   }
   states
