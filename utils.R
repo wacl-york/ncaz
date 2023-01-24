@@ -3,11 +3,14 @@ OUTPUT_DIR_FROM_SHINY <- "/mnt/shiny/ncaz"
 OUTPUT_DIR_FROM_CRON <- "/shared/storage/shiny0/ncaz"
 SITES <- list(
   NEWC = list(human_readable = 'central',
-              intervention = as_datetime("2023-01-30")),
+              intervention = as_datetime("2023-01-30"),
+              stable_date=as_datetime("2011-01-01")),
   NCA3 = list(human_readable = 'outer',
-              intervention = as_datetime("2023-01-30")),
+              intervention = as_datetime("2023-01-30"),
+              stable_date=as_datetime("2011-01-01")),
   SHDG = list(human_readable = 'sheffield',
-              intervention = as_datetime("2023-02-27"))
+              intervention = as_datetime("2023-02-27"),
+              stable_date=as_datetime("2016-01-01"))
 )
 
 load_data <- function(site) {
