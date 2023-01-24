@@ -2,7 +2,8 @@ library(shiny)
 library(shinydashboard)
 library(shinyWidgets)
 library(shinycssloaders)
-library(tidyverse)
+library(dplyr)
+library(data.table)
 library(lubridate)
 library(plotly)
 source("utils.R")
@@ -142,10 +143,8 @@ plot_detrended <- function(df) {
       hoverinfo = "none"
     ) %>%
     layout(
-      xaxis = list(
-        range = c(today() - months(3), today()),
-        title = ""
-      ),
+      xaxis = list(range = c(today() - months(3), today()),
+                   title = ""),
       yaxis = list(title = "NO2 (ppb)"),
       legend = list(
         orientation = "h",
@@ -160,7 +159,8 @@ plot_intervention <- function(df) {
     add_lines(
       y =  ~ intervention_mean_pct,
       name = "Intervention effect",
-      color = I("#9467BD")
+      color = I("#9467BD"),
+      showlegend = FALSE
     ) %>%
     add_ribbons(
       ymin = ~ intervention_lower_pct,
@@ -172,67 +172,91 @@ plot_intervention <- function(df) {
       hoverinfo = "none"
     ) %>%
     layout(
-      xaxis = list(
-        range = c(today() - months(3), today()),
-        title = ""
-      ),
+      xaxis = list(range = c(today() - months(3), today()),
+                   title = ""),
       yaxis = list(title = "% change in NO2 due to CAZ")
     )
 }
 
 generate_tab <- function(df, site) {
-  this_df <- df |> filter(code == site, !is.na(detrended_abs))
+  this_df <- df[code == site & !is.na(detrended_abs)]
   p1 <- plot_detrended(this_df)
   p2 <- plot_intervention(this_df)
   
   # Time-series of detrended NO2 + intervention effect
-  obj1 <- subplot(p1, p2, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
-             layout(hovermode = "x unified")
+  obj1 <-
+    subplot(p1,
+            p2,
+            nrows = 2,
+            shareX = TRUE,
+            titleY = TRUE) %>%
+    layout(hovermode = "x unified")
   
   # Cards displaying the current intervention effect and the date when it went statistically significant
-  curr_effect <- this_df %>% slice_max(time, n=1)
-  obj2 <- valueBox(sprintf("%.0f%%", curr_effect$intervention_mean_pct),
-                   subtitle=sprintf("Intervention effect as of %s", curr_effect$time),
-                   icon=icon("bolt-lightning"),
-                   color = "green",
-                   width=6)
+  curr_effect <- this_df %>% slice_max(time, n = 1)
+  obj2 <-
+    valueBox(
+      sprintf("%.0f%%", curr_effect$intervention_mean_pct),
+      subtitle = sprintf("Intervention effect as of %s", curr_effect$time),
+      icon = icon("bolt-lightning"),
+      color = "green",
+      width = 6
+    )
   first_sig <- this_df %>%
-                filter(intervention_upper < 1) |>
-                slice_min(time, n=1)
-  if (nrow(first_sig) == 0) first_sig <- list(time = "Not yet")
-  obj3 <- valueBox(sprintf("%s", first_sig$time),
-                   subtitle="When intervention was first statistically significant",
-                   icon=icon("calendar"),
-                   color = "green",
-                   width=6)
+    filter(intervention_upper < 1) %>%
+    slice_min(time, n = 1)
+  if (nrow(first_sig) == 0)
+    first_sig <- list(time = "Not yet")
+  obj3 <- valueBox(
+    sprintf("%s", first_sig$time),
+    subtitle = "When intervention was first statistically significant",
+    icon = icon("calendar"),
+    color = "green",
+    width = 6
+  )
   
   tagList(fluidRow(obj1), br(), br(), fluidRow(obj2, obj3))
 }
 
 server <- function(input, output) {
-  
-  
   df <-
-    read_csv(sprintf("%s/data/results.csv", OUTPUT_DIR_FROM_SHINY))
-  df <- df %>%
-    filter(time >= as_date("2011-01-01")) %>%
-    mutate(
-      detrended_abs = exp(detrended + 0.5 * detrended_var),
-      detrended_sd = sqrt(detrended_abs ** 2 * (exp(detrended_var) - 1)),
-      intervention_abs = exp(intervention + 0.5 * intervention_var),
-      intervention_sd = sqrt(intervention_abs ** 2 * (exp(intervention_var) - 1)),
-      detrended_abs = detrended_abs - min(detrended_abs, na.rm = T),
-      detrended_upper = detrended_abs + 2 * detrended_sd,
-      detrended_lower = detrended_abs - 2 * detrended_sd,
-      intervention_upper = intervention_abs + 2 * intervention_sd,
-      intervention_lower = intervention_abs - 2 * intervention_sd,
-      bau = ifelse(time >= INTERVENTION_DATE, no2 * intervention_abs, NA),
-      bau_lower = bau * (intervention_abs - 2 * intervention_sd),
-      bau_upper = bau * (intervention_abs + 2 * intervention_sd),
-      intervention_mean_pct = 100 - (intervention_abs * 100),
-      intervention_lower_pct = 100 - ((intervention_abs - 2 * intervention_sd) * 100),
-      intervention_upper_pct = 100 - ((intervention_abs + 2 * intervention_sd) * 100)
-    )
+    fread(sprintf("%s/data/results.csv", OUTPUT_DIR_FROM_SHINY))
+  df <-
+    df[time >= as_date("2011-01-01")]  # Hide initial transient until system is at steady state
+  
+  # Convert log(mean) and log(var) into mean and sd
+  df[, c("detrended_abs", "intervention_abs") := .(exp(detrended + 0.5 * detrended_var),
+                                                   exp(intervention + 0.5 * intervention_var))]
+  df[, c("detrended_sd", "intervention_sd") := .(sqrt(detrended_abs ** 2 * (exp(detrended_var) - 1)),
+                                                 sqrt(intervention_abs ** 2 * (exp(intervention_var) - 1)))]
+  # Rescale detrending
+  df[, detrended_abs := detrended_abs - min(detrended_abs, na.rm = T)]
+  
+  # Create Business as Usual and relative intervention (%) columns
+  df[, c("bau", "intervention_mean_pct") := .(
+    ifelse(time >= INTERVENTION_DATE, no2 * intervention_abs, NA),
+    100 - (intervention_abs * 100)
+  )]
+  
+  # Create CIs
+  df[, c("detrended_lower",
+         "intervention_lower",
+         "bau_lower",
+         "intervention_lower_pct") := .(
+           detrended_abs - 2 * detrended_sd,
+           intervention_abs - 2 * intervention_sd,
+           bau * (intervention_abs - 2 * intervention_sd),
+           100 - (intervention_abs - 2 * intervention_sd) * 100
+         )]
+  df[, c("detrended_upper",
+         "intervention_upper",
+         "bau_upper",
+         "intervention_upper_pct") := .(
+           detrended_abs + 2 * detrended_sd,
+           intervention_abs + 2 * intervention_sd,
+           bau * (intervention_abs + 2 * intervention_sd),
+           100 - (intervention_abs + 2 * intervention_sd) * 100
+         )]
   
   output$NEWC <- renderUI({
     generate_tab(df, "NEWC")
