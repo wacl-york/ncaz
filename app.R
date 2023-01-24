@@ -1,4 +1,6 @@
 library(shiny)
+library(shinydashboard)
+library(shinyWidgets)
 library(shinycssloaders)
 library(tidyverse)
 library(lubridate)
@@ -7,6 +9,7 @@ source("utils.R")
 
 ui <- navbarPage(
   "Newcastle and Gateshead CAZ",
+  useShinydashboard(),
   tabPanel("Live monitor",
            sidebarLayout(
              sidebarPanel(
@@ -107,87 +110,107 @@ ui <- navbarPage(
   )
 )
 
+plot_detrended <- function(df) {
+  plot_ly(df, x =  ~ time) %>%
+    add_lines(y =  ~ no2,
+              name = "Measured",
+              color = I("#1F77B4")) %>%
+    add_lines(
+      y =  ~ detrended_abs,
+      name = "Detrended",
+      color = I("#FF7F0E")
+    ) %>%
+    add_ribbons(
+      ymin = ~ detrended_lower,
+      ymax = ~ detrended_upper,
+      name = "Detrended +/- 2sds",
+      line = list(color = 'rgba(255, 127, 4, 0)'),
+      fillcolor = 'rgba(255, 127, 4, 0.2)',
+      showlegend = FALSE,
+      hoverinfo = "none"
+    ) %>%
+    add_lines(y =  ~ bau,
+              name = "Business-as-usual",
+              color = I("#2CA02C")) %>%
+    add_ribbons(
+      ymin = ~ bau_lower,
+      ymax = ~ bau_upper,
+      name = "BAU +/- 2sds",
+      line = list(color = 'rgba(44, 160, 44, 0)'),
+      fillcolor = 'rgba(44, 160, 44, 0.2)',
+      showlegend = FALSE,
+      hoverinfo = "none"
+    ) %>%
+    layout(
+      xaxis = list(
+        range = c(today() - months(3), today()),
+        title = ""
+      ),
+      yaxis = list(title = "NO2 (ppb)"),
+      legend = list(
+        orientation = "h",
+        xanchor = "center",
+        x = 0.5
+      )
+    )
+}
+
+plot_intervention <- function(df) {
+  plot_ly(df, x =  ~ time) %>%
+    add_lines(
+      y =  ~ intervention_mean_pct,
+      name = "Intervention effect",
+      color = I("#9467BD")
+    ) %>%
+    add_ribbons(
+      ymin = ~ intervention_lower_pct,
+      ymax = ~ intervention_upper_pct,
+      name = "Intervention effect +/- 2sds",
+      line = list(color = 'rgba(148, 103, 189, 0)'),
+      fillcolor = 'rgba(148, 103, 189, 0.2)',
+      showlegend = FALSE,
+      hoverinfo = "none"
+    ) %>%
+    layout(
+      xaxis = list(
+        range = c(today() - months(3), today()),
+        title = ""
+      ),
+      yaxis = list(title = "% change in NO2 due to CAZ")
+    )
+}
+
+generate_tab <- function(df, site) {
+  this_df <- df |> filter(code == site, !is.na(detrended_abs))
+  p1 <- plot_detrended(this_df)
+  p2 <- plot_intervention(this_df)
+  
+  # Time-series of detrended NO2 + intervention effect
+  obj1 <- subplot(p1, p2, nrows = 2, shareX = TRUE, titleY = TRUE) %>%
+             layout(hovermode = "x unified")
+  
+  # Cards displaying the current intervention effect and the date when it went statistically significant
+  curr_effect <- this_df %>% slice_max(time, n=1)
+  obj2 <- valueBox(sprintf("%.0f%%", curr_effect$intervention_mean_pct),
+                   subtitle=sprintf("Intervention effect as of %s", curr_effect$time),
+                   icon=icon("bolt-lightning"),
+                   color = "green",
+                   width=6)
+  first_sig <- this_df %>%
+                filter(intervention_upper < 1) |>
+                slice_min(time, n=1)
+  if (nrow(first_sig) == 0) first_sig <- list(time = "Not yet")
+  obj3 <- valueBox(sprintf("%s", first_sig$time),
+                   subtitle="When intervention was first statistically significant",
+                   icon=icon("calendar"),
+                   color = "green",
+                   width=6)
+  
+  tagList(fluidRow(obj1), br(), br(), fluidRow(obj2, obj3))
+}
+
 server <- function(input, output) {
-  generate_tab <- function(site) {
-    # The time-series of NO2 + intervention + BAU
-    p1 <-
-      plot_ly(df %>% filter(code == site,!is.na(detrended_abs)), x =  ~ time) %>%
-      add_lines(y =  ~ no2,
-                name = "Measured",
-                color = I("#1F77B4")) %>%
-      add_lines(
-        y =  ~ detrended_abs,
-        name = "Detrended",
-        color = I("#FF7F0E")
-      ) %>%
-      add_ribbons(
-        ymin = ~ detrended_lower,
-        ymax = ~ detrended_upper,
-        name = "Detrended +/- 2sds",
-        line = list(color = 'rgba(255, 127, 4, 0)'),
-        fillcolor = 'rgba(255, 127, 4, 0.2)',
-        showlegend = FALSE,
-        hoverinfo = "none"
-      ) %>%
-      add_lines(y =  ~ bau,
-                name = "Business-as-usual",
-                color = I("#2CA02C")) %>%
-      add_ribbons(
-        ymin = ~ bau_lower,
-        ymax = ~ bau_upper,
-        name = "BAU +/- 2sds",
-        line = list(color = 'rgba(44, 160, 44, 0)'),
-        fillcolor = 'rgba(44, 160, 44, 0.2)',
-        showlegend = FALSE,
-        hoverinfo = "none"
-      ) %>%
-      layout(
-        xaxis = list(
-          range = c(today() - months(3), today()),
-          title = ""
-        ),
-        yaxis = list(title = "NO2 (ppb)"),
-        legend = list(
-          orientation = "h",
-          xanchor = "center",
-          x = 0.5
-        )
-      )
-    
-    
-    # Time-series of intervention over time
-    p2 <-
-      plot_ly(df %>% filter(code == site,!is.na(detrended_abs)), x =  ~ time) %>%
-      add_lines(
-        y =  ~ intervention_mean_pct,
-        name = "Intervention effect",
-        color = I("#9467BD")
-      ) %>%
-      add_ribbons(
-        ymin = ~ intervention_lower_pct,
-        ymax = ~ intervention_upper_pct,
-        name = "Intervention effect +/- 2sds",
-        line = list(color = 'rgba(148, 103, 189, 0)'),
-        fillcolor = 'rgba(148, 103, 189, 0.2)',
-        showlegend = FALSE,
-        hoverinfo = "none"
-      ) %>%
-      layout(
-        xaxis = list(
-          range = c(today() - months(3), today()),
-          title = ""
-        ),
-        yaxis = list(title = "% change in NO2 due to CAZ")
-      )
-    
-    subplot(p1,
-            p2,
-            nrows = 2,
-            shareX = TRUE,
-            titleY = TRUE) %>%
-      layout(hovermode = "x unified")
-    
-  }
+  
   
   df <-
     read_csv(sprintf("%s/data/results.csv", OUTPUT_DIR_FROM_SHINY))
@@ -212,10 +235,10 @@ server <- function(input, output) {
     )
   
   output$NEWC <- renderUI({
-    generate_tab("NEWC")
+    generate_tab(df, "NEWC")
   })
   output$NCA3 <- renderUI({
-    generate_tab("NCA3")
+    generate_tab(df, "NCA3")
   })
   
   
