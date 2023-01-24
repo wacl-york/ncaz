@@ -186,7 +186,9 @@ for (site in names(SITES)) {
                   filter(time < START_DATE, code == site) |> 
                   select(time, code) |>
                   mutate(detrended = as.numeric(filt$att[, detrended_ind]),
-                         detrended_var = as.numeric(filt$Ptt[detrended_ind, detrended_ind, ]))
+                         detrended_var = as.numeric(filt$Ptt[detrended_ind, detrended_ind, ]),
+                         intervention = 0,
+                         intervention_var =0)
   
   # Save models and states
   saveRDS(filt, sprintf("%s/models/univariate_%s.rds", OUTPUT_DIR, site))
