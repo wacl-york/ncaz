@@ -7,15 +7,15 @@ source("utils.R")
 OUTPUT_DIR <- OUTPUT_DIR_FROM_CRON
 
 # Load states
-states <- lapply(SITES, function(x) {
+states <- lapply(setNames(names(SITES), names(SITES)), function(x) {
   readRDS(sprintf("%s/states/univariate_%s.rds",
                   OUTPUT_DIR,
-                  x$human_readable))
+                  x))
 })
-models <- lapply(SITES, function(x) {
+models <- lapply(setNames(names(SITES), names(SITES)), function(x) {
   readRDS(sprintf("%s/models/univariate_%s.rds",
                   OUTPUT_DIR,
-                  x$human_readable))
+                  x))
 })
 
 # for each site:

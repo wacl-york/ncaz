@@ -14,19 +14,18 @@ OUTPUT_DIR <- OUTPUT_DIR_FROM_SHINY
 # Will imagine that this started on 15th January to allow for a few days
 # of manually updating the filter
 START_DATE <- as_date("2023-01-15")
-meta <- importMeta() 
-newcastle_sites <- meta |>
-          filter(grepl("Newcastle", site)) |>
-          pull(code)
+#raw_df <- importAURN(site=names(SITES), year = 2010:2023) |>
+#            select(time=date, code, no2, ws, wd, air_temp)
+#saveRDS(raw_df, sprintf("%s/data/training_2010_2023-01-24.rds", OUTPUT_DIR))
         
-df <- readRDS(sprintf("%s/data/training_2010_2023-01-19.rds", OUTPUT_DIR))
+raw_df <- readRDS(sprintf("%s/data/training_2010_2023-01-24.rds", OUTPUT_DIR))
 
 # Average to hourly, including vector averaging of wind direction
-df_daily <- df |>
+df_daily <- raw_df |>
   mutate(time = as_datetime(as_date(time)),
          wind_y = ws * sin(2 * pi * wd / 360),
          wind_x = ws * cos(2 * pi * wd / 360)) |>
-  group_by(site, code, time) |>
+  group_by(code, time) |>
   summarise(no2 = mean(no2, na.rm=T),
             air_temp = mean(air_temp,na.rm=T),
             wind_y = mean(wind_y, na.rm=T),
@@ -40,15 +39,21 @@ df_daily <- df |>
       ws_vec = (wind_x ^ 2 + wind_y ^ 2) ^ 0.5,
       wind_y_nows = sin(2 * pi * wd / 360),
       wind_x_nows = cos(2 * pi * wd / 360),
-      intervention=0
+      intervention=0,
+      sin_year = sin(2 * pi * (yday(time) / 365)),
+      cos_year = cos(2 * pi * (yday(time) / 365))
 )
 
-# Prep data for modelling with yearly terms
-yearly_coefs <- as_tibble(
-                          fourier(ts(df_daily |> filter(code == 'NEWC') |> pull(time), frequency=365), K=1)) |>
-                mutate(time = df_daily |> filter(code == 'NEWC') |> pull(time))
+earliest_clean_dates <- df_daily %>%
+                          mutate(is_clean = complete.cases(.)) |>
+                          filter(is_clean) |>
+                          group_by(code) |>
+                          summarise(earliest_clean = min(time)) |>
+                          ungroup()
 df_daily <- df_daily |>
-  inner_join(yearly_coefs, by="time")
+  inner_join(earliest_clean_dates, by="code") |>
+  filter(time >= earliest_clean) |>
+  select(-earliest_clean)
 
 # Firstly get priors for annual cycle
 calculate_doy_average <- function(df, pollutant = "no2") {
@@ -88,15 +93,9 @@ fit_univariate <- function(df, H=NA, Q=NA) {
   n_yearly <- 1
   n_covars <- 5
   n_covars_total <- n_yearly*2 + n_covars
-  # TODO remove days of week!
-  # doesn't seem to be doing what I expect, i.e. it doesn't have any variance
-  # in Z-matrix
-  form_covar <- "~ air_temp + log(ws) + wind_x_nows + wind_y_nows + intervention"
-  form_yearly <- paste0(rep(c("S", "C"), n_yearly), rep(1:n_yearly, each=2), "-365")
-  form <- as.formula(sprintf("%s + `%s`", 
-                  form_covar,
-                  paste0(form_yearly, collapse="` + `")
-                  ))
+  # NB: removed days of week as it doesn't seem to be doing what I expect, 
+  # i.e. it doesn't have any variance in Z-matrix
+  form <- as.formula("~ air_temp + log(ws) + wind_x_nows + wind_y_nows + intervention + sin_year + cos_year")
   
   q_diag <- matrix(0, ncol=n_covars_total, nrow=n_covars_total)
   
@@ -109,7 +108,6 @@ fit_univariate <- function(df, H=NA, Q=NA) {
   
   mod <- SSModel(log(df$no2) ~ 
                  SSMtrend(1, Q=Q) +                                   
-                 #SSMseasonal(7, Q=0, sea.type="dummy") +
                  SSMregression(form,
                                a1=a1,
                                data=df, Q=q_diag),
@@ -119,12 +117,6 @@ fit_univariate <- function(df, H=NA, Q=NA) {
                   "Temperature", "WindSpeed", "WindX", "WindY", "Intervention",
                   paste0(paste0("yearly_", rep(c("sin", "cos"), n_yearly)), rep(1:n_yearly, each=2)),
                   "level"
-                  #'Fri',
-                  #'Sat',
-                  #'Sun',
-                  #'Mon',
-                  #'Tues',
-                  #'Weds'
                 )
   )
   
@@ -135,7 +127,9 @@ fit_univariate <- function(df, H=NA, Q=NA) {
   mod
 }
 
-# ------------- FIT MODELS FOR EACH SITE!
+#---------------------------------------------
+# Test manual update code on a single site
+#---------------------------------------------
 df_central <- df_daily |> filter(code == 'NEWC')
 mod_central <- fit_univariate(df_central |> filter(time < START_DATE ))
 filt_central <- KFS(mod_central)
@@ -151,7 +145,6 @@ df_central |>
   ggplot(aes(x=time, y=value, colour=name)) +
     geom_line(alpha=0.5)
 
-# ------------- Update states
 # Now iterate through each day and add new matrices onto the old
 df_to_update <- df_central[which(df_central$time >= START_DATE), ]
 results <- update_multiple_dates(df_to_update, 
@@ -164,49 +157,44 @@ results <- update_multiple_dates(df_to_update,
 filt_all <- KFS(fit_univariate(df_central, Q=mod_central$Q[8, 8, 1], H=mod_central$H[1, 1, 1]))
 
 # That'll do!
-filt_all$a[(filt_all$dims$n - 2):(filt_all$dims$n+1), ]
-rbind(
-  as.numeric(t(results[[2]]$a)),
-  as.numeric(t(results[[3]]$a)),
-  as.numeric(t(results[[4]]$a)),
-  as.numeric(t(results[[5]]$a))
-)
+days_since_start <- as.numeric(difftime(max(df_daily$time), START_DATE, units="days"))
+manual_filtered <- do.call('rbind', lapply(2:length(results), function(i) {
+  as.numeric(t(results[[i]]$a))
+}))
+full_filtered <- filt_all$a[(filt_all$dims$n+1 - days_since_start):(filt_all$dims$n+1), ]
 
-# So fit second site, generate states up until 15th January, then manually update states using update_models.R
-mod_outer <- fit_univariate(df_daily |> filter(code == 'NCA3', time < START_DATE ))
-filt_outer <- KFS(mod_outer)
+exp(full_filtered)
+exp(manual_filtered)
+cbind(manual=exp(manual_filtered[, 8]), kfs=exp(full_filtered[, 8]))
 
-saveRDS(filt_central, sprintf("%s/models/univariate_central.rds", OUTPUT_DIR))
-saveRDS(filt_outer, sprintf("%s/models/univariate_outer.rds", OUTPUT_DIR))
+#-------------------------------------
+# Fit models for all sites
+#-------------------------------------
+dfs <- list()
+for (site in names(SITES)) {
+  # Fit model, run the Kalman Filter, and save the final states
+  mod <- fit_univariate(df_daily |> filter(code == site, time < START_DATE ))
+  filt <- KFS(mod, filtering = "state", smoothing = "none")
+  final_states <- list(list(date=START_DATE - days(1),
+                              a=t(t(filt$a[filt$dims$n+1, ])),
+                              P=filt$P[, , filt$dims$n+1]))
+  
+  detrended_ind <- which(colnames(filt$att) == 'level')
+  
+  # Save dataframe containing the detrended time-series
+  dfs[[site]] <- df_daily |> 
+                  filter(time < START_DATE, code == site) |> 
+                  select(time, code) |>
+                  mutate(detrended = as.numeric(filt$att[, detrended_ind]),
+                         detrended_var = as.numeric(filt$Ptt[detrended_ind, detrended_ind, ]))
+  
+  # Save models and states
+  saveRDS(filt, sprintf("%s/models/univariate_%s.rds", OUTPUT_DIR, site))
+  saveRDS(final_states, sprintf("%s/states/univariate_%s.rds", OUTPUT_DIR, site))
+}
 
-# Save initial states which will pull from model later
-initial_states_central <- list(list(date=START_DATE - days(1),
-                                    a=t(t(filt_central$a[filt_central$dims$n+1, ])),
-                                    P=filt_central$P[, , filt_central$dims$n+1]))
-initial_states_outer <- list(list(date=START_DATE - days(1),
-                                    a=t(t(filt_outer$a[filt_outer$dims$n+1, ])),
-                                    P=filt_outer$P[, , filt_outer$dims$n+1]))
-    
-saveRDS(initial_states_central, sprintf("%s/states/univariate_central.rds", OUTPUT_DIR))
-saveRDS(initial_states_outer, sprintf("%s/states/univariate_outer.rds", OUTPUT_DIR))
-
-# Save data to DB
+# Combine detrended time-series from every site with the measured NO2s
 df_to_save <- df_daily |> filter(time < START_DATE) |> select(time, code, no2)
-detrended_ind <- which(colnames(filt_central$att) == 'level')
-# Now add new states in
-df_detrended_central <- df_daily |> 
-                filter(time < START_DATE) |>
-                select(time, code) |>
-                filter(code == 'NEWC') |>
-                mutate(detrended = as.numeric(filt_central$att[, detrended_ind]),
-                       detrended_var = as.numeric(filt_central$Ptt[detrended_ind, detrended_ind, ]))
-df_detrended_outer <- df_daily |> 
-                filter(time < START_DATE) |>
-                select(time, code) |>
-                filter(code == 'NCA3') |>
-                mutate(detrended = as.numeric(filt_outer$att[, detrended_ind]),
-                       detrended_var = as.numeric(filt_outer$Ptt[detrended_ind, detrended_ind, ]))
-df_to_save <- df_to_save |>
-  inner_join(df_detrended_central |> rbind(df_detrended_outer), by=c("time", "code")) |>
-  mutate(intervention=0, intervention_var=0)
+df_detrended <- bind_rows(dfs)
+df_to_save <- df_to_save |> inner_join(df_detrended, by=c("time", "code"))
 write_csv(df_to_save, sprintf("%s/data/results.csv", OUTPUT_DIR))

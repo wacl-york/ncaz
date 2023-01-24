@@ -72,7 +72,9 @@ ui <- navbarPage(
                tabPanel("Newcastle Central",
                         withSpinner(uiOutput("NEWC"))),
                tabPanel("Cradlewell Roadside",
-                        withSpinner(uiOutput("NCA3")))
+                        withSpinner(uiOutput("NCA3"))),
+               tabPanel("Sheffield",
+                        withSpinner(uiOutput("SHDG")))
              ))
            )),
   tabPanel(
@@ -263,6 +265,9 @@ server <- function(input, output) {
   })
   output$NCA3 <- renderUI({
     generate_tab(df, "NCA3")
+  })
+  output$SHDG <- renderUI({
+    generate_tab(df, "SHDG")
   })
   
   

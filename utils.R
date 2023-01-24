@@ -2,8 +2,12 @@ INTERVENTION_DATE <- as_datetime("2023-01-30")
 OUTPUT_DIR_FROM_SHINY <- "/mnt/shiny/ncaz"
 OUTPUT_DIR_FROM_CRON <- "/shared/storage/shiny0/ncaz"
 SITES <- list(
-  NEWC = list(human_readable = 'central'),
-  NCA3 = list(human_readable = 'outer')
+  NEWC = list(human_readable = 'central',
+              intervention = as_datetime("2023-01-30")),
+  NCA3 = list(human_readable = 'outer',
+              intervention = as_datetime("2023-01-30")),
+  SHDG = list(human_readable = 'sheffield',
+              intervention = as_datetime("2023-02-27"))
 )
 
 load_data <- function(site) {
@@ -43,7 +47,7 @@ load_data <- function(site) {
       ws_vec = (wind_x ^ 2 + wind_y ^ 2) ^ 0.5,
       wind_y_nows = sin(2 * pi * wd / 360),
       wind_x_nows = cos(2 * pi * wd / 360),
-      intervention = as.numeric(time >= INTERVENTION_DATE)
+      intervention = as.numeric(time >= SITES[[site]][['intervention']])
     )
 }
 
