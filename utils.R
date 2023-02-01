@@ -56,6 +56,7 @@ load_data <- function(site) {
 
 update_univariate <- function(model,
                               newdata,
+                              intervention_date,
                               alpha = NULL,
                               P = NULL) {
   if (is.null(P)) {
@@ -72,7 +73,7 @@ update_univariate <- function(model,
   Z[1, 2] <- log(newdata$ws)
   Z[1, 3] <- cos(2 * pi * newdata$wd / 360)
   Z[1, 4] <- sin(2 * pi * newdata$wd / 360)
-  Z[1, 5] <- ifelse(newdata$time >= as_date("2023-02-01"), 1, 0)
+  Z[1, 5] <- ifelse(newdata$time >= intervention_date, 1, 0)
   Z[1, 6] <- sin(2 * pi * (yday(newdata$time) / 365))
   Z[1, 7] <- cos(2 * pi * (yday(newdata$time) / 365))
   Z[1, 8] <- 1
@@ -92,11 +93,11 @@ update_univariate <- function(model,
        P = P_update)
 }
 
-update_multiple_dates <- function(data, model, states) {
+update_multiple_dates <- function(data, model, intervention_date, states) {
   a_new <- states[[length(states)]]$a
   P_new <- states[[length(states)]]$P
   for (i in 1:nrow(data)) {
-    updated <- update_univariate(model, data[i,], a_new, P_new)
+    updated <- update_univariate(model, data[i,], intervention_date, a_new, P_new)
     a_new <- updated$a
     P_new <- updated$P
     states <- append(states, list(list(

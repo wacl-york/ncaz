@@ -37,7 +37,15 @@ for (site in names(SITES)) {
   detrended_ind <- which(row.names(a_last) == 'level')
   intervention_ind <- which(row.names(a_last) == 'Intervention')
   for (i in 1:nrow(this_df)) {
-    updated <- update_univariate(models[[site]], this_df[i, ], a_last, P_last)
+    # To kick-start the intervention variable, set a high covariance
+    # the day before. This will update the intervention state variable,
+    # as well as reducing the covariance massively in subsequent updates
+    if (this_df$time[i] == (SITES[[site]]$intervention - days(1))) {
+      P_last[intervention_ind, intervention_ind] <- 1e5
+    }
+    updated <- update_univariate(models[[site]], this_df[i, ],
+                                 SITES[[site]]$intervention,
+                                 a_last, P_last)
     a_last <- updated$a
     P_last <- updated$P
     this_states <- append(this_states, list(list(
