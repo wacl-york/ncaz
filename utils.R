@@ -56,15 +56,21 @@ load_data <- function(site) {
 
 update_univariate <- function(model,
                               newdata,
+                              intervention_date,
                               alpha = NULL,
                               P = NULL) {
   if (is.null(P)) {
-    P <- model$P[, , model$dims$n + 1]
+    P <- model$Ptt[, , model$dims$n]
   }
   if (is.null(alpha)) {
-    alpha <- t(t(model$a[model$dims$n + 1,]))
+    alpha <- t(t(model$att[model$dims$n,]))
   }
   # Z Needs to handle newdata!
+
+  # time-update alpha and P
+  # NB: not updating alpha since it should be T*alpha + Bu_k, but T is diagonal and u_k is 0
+  # Likewise this should technically be T * P * t(T) + Q but the T is redundant as diagonal
+  P <- P + model$model$Q[, , 1]
   
   Z <- array(dim = c(1, 8))
   # Temp, ws, windx, windy, intervention, yearly-sin, yearly-cos, level
@@ -72,7 +78,7 @@ update_univariate <- function(model,
   Z[1, 2] <- log(newdata$ws)
   Z[1, 3] <- cos(2 * pi * newdata$wd / 360)
   Z[1, 4] <- sin(2 * pi * newdata$wd / 360)
-  Z[1, 5] <- ifelse(newdata$time >= as_date("2023-02-01"), 1, 0)
+  Z[1, 5] <- ifelse(newdata$time >= intervention_date, 1, 0)
   Z[1, 6] <- sin(2 * pi * (yday(newdata$time) / 365))
   Z[1, 7] <- cos(2 * pi * (yday(newdata$time) / 365))
   Z[1, 8] <- 1
@@ -85,18 +91,17 @@ update_univariate <- function(model,
   # Calculate kalman gain as:
   K = P %*% t(Z) %*% (Z %*% P %*% t(Z) + H) ^ -1
   alpha_update = alpha + K %*% (y - Z %*% alpha)
-  P_update = (diag(8) - K %*% Z) * P * t(diag(8) - K %*% Z) + K %*% H %*%
-    t(K)
+  P_update = (diag(8) - K %*% Z) %*% P
   
   list(a = alpha_update,
        P = P_update)
 }
 
-update_multiple_dates <- function(data, model, states) {
+update_multiple_dates <- function(data, model, intervention_date, states) {
   a_new <- states[[length(states)]]$a
   P_new <- states[[length(states)]]$P
   for (i in 1:nrow(data)) {
-    updated <- update_univariate(model, data[i,], a_new, P_new)
+    updated <- update_univariate(model, data[i,], intervention_date, a_new, P_new)
     a_new <- updated$a
     P_new <- updated$P
     states <- append(states, list(list(

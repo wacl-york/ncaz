@@ -1,6 +1,5 @@
 # Fits Univariate detrending models for 2 Newcastle AURN sites
 # Outputs a saved model object along with the latest states
-# TODO: Fit multivariate as well?
 library(tidyverse)
 library(lubridate)
 library(openair)
@@ -105,11 +104,15 @@ fit_univariate <- function(df, H=NA, Q=NA) {
 
   a1 <- c(rep(0, n_covars),
           coefs_yearly[1:(n_yearly*2), 1])
+  p1 <- matrix(0, nrow=n_covars_total, ncol=n_covars_total)
+  p1inf <- diag(n_covars_total)
   
   mod <- SSModel(log(df$no2) ~ 
                  SSMtrend(1, Q=Q) +                                   
                  SSMregression(form,
                                a1=a1,
+                               P1=p1,
+                               P1inf = p1inf,
                                data=df, Q=q_diag),
                   H=H)
   mod <- rename_states(mod, 
@@ -149,6 +152,7 @@ df_central |>
 df_to_update <- df_central[which(df_central$time >= START_DATE), ]
 results <- update_multiple_dates(df_to_update, 
                                  filt_central, 
+                                 SITES[['NEWC']]$intervention,
                                  list(list(date=START_DATE - days(1),
                                            a=NULL,
                                            P=NULL)))
@@ -176,8 +180,8 @@ for (site in names(SITES)) {
   mod <- fit_univariate(df_daily |> filter(code == site, time < START_DATE ))
   filt <- KFS(mod, filtering = "state", smoothing = "none")
   final_states <- list(list(date=START_DATE - days(1),
-                              a=t(t(filt$a[filt$dims$n+1, ])),
-                              P=filt$P[, , filt$dims$n+1]))
+                              a=t(t(filt$att[filt$dims$n, ])),
+                              P=filt$Ptt[, , filt$dims$n]))
   
   detrended_ind <- which(colnames(filt$att) == 'level')
   

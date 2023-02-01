@@ -237,8 +237,8 @@ server <- function(input, output) {
   
   # Create Business as Usual and relative intervention (%) columns
   df[, c("bau", "intervention_mean_pct") := .(
-    ifelse(time >= INTERVENTION_DATE, no2 * intervention_abs, NA),
-    100 - (intervention_abs * 100)
+    ifelse(time >= INTERVENTION_DATE, no2 / intervention_abs, NA),
+    (intervention_abs * 100) - 100
   )]
   
   # Create CIs
@@ -249,7 +249,7 @@ server <- function(input, output) {
            detrended_abs - 2 * detrended_sd,
            intervention_abs - 2 * intervention_sd,
            bau * (intervention_abs - 2 * intervention_sd),
-           100 - (intervention_abs - 2 * intervention_sd) * 100
+           (intervention_abs - 2 * intervention_sd) * 100 - 100
          )]
   df[, c("detrended_upper",
          "intervention_upper",
@@ -258,7 +258,7 @@ server <- function(input, output) {
            detrended_abs + 2 * detrended_sd,
            intervention_abs + 2 * intervention_sd,
            bau * (intervention_abs + 2 * intervention_sd),
-           100 - (intervention_abs + 2 * intervention_sd) * 100
+           (intervention_abs + 2 * intervention_sd) * 100 - 100
          )]
   
   output$NEWC <- renderUI({
