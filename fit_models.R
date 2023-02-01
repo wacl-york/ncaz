@@ -180,8 +180,8 @@ for (site in names(SITES)) {
   mod <- fit_univariate(df_daily |> filter(code == site, time < START_DATE ))
   filt <- KFS(mod, filtering = "state", smoothing = "none")
   final_states <- list(list(date=START_DATE - days(1),
-                              a=t(t(filt$a[filt$dims$n+1, ])),
-                              P=filt$P[, , filt$dims$n+1]))
+                              a=t(t(filt$att[filt$dims$n, ])),
+                              P=filt$Ptt[, , filt$dims$n]))
   
   detrended_ind <- which(colnames(filt$att) == 'level')
   

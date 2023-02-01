@@ -60,12 +60,17 @@ update_univariate <- function(model,
                               alpha = NULL,
                               P = NULL) {
   if (is.null(P)) {
-    P <- model$P[, , model$dims$n + 1]
+    P <- model$Ptt[, , model$dims$n]
   }
   if (is.null(alpha)) {
-    alpha <- t(t(model$a[model$dims$n + 1,]))
+    alpha <- t(t(model$att[model$dims$n,]))
   }
   # Z Needs to handle newdata!
+
+  # time-update alpha and P
+  # NB: not updating alpha since it should be T*alpha + Bu_k, but T is diagonal and u_k is 0
+  # Likewise this should technically be T * P * t(T) + Q but the T is redundant as diagonal
+  P <- P + model$model$Q[, , 1]
   
   Z <- array(dim = c(1, 8))
   # Temp, ws, windx, windy, intervention, yearly-sin, yearly-cos, level
@@ -86,8 +91,7 @@ update_univariate <- function(model,
   # Calculate kalman gain as:
   K = P %*% t(Z) %*% (Z %*% P %*% t(Z) + H) ^ -1
   alpha_update = alpha + K %*% (y - Z %*% alpha)
-  P_update = (diag(8) - K %*% Z) * P * t(diag(8) - K %*% Z) + K %*% H %*%
-    t(K)
+  P_update = (diag(8) - K %*% Z) %*% P
   
   list(a = alpha_update,
        P = P_update)
