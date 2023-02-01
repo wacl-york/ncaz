@@ -72,7 +72,9 @@ ui <- navbarPage(
                tabPanel("Newcastle Central",
                         withSpinner(uiOutput("NEWC"))),
                tabPanel("Cradlewell Roadside",
-                        withSpinner(uiOutput("NCA3")))
+                        withSpinner(uiOutput("NCA3"))),
+               tabPanel("Sheffield",
+                        withSpinner(uiOutput("SHDG")))
              ))
            )),
   tabPanel(
@@ -221,8 +223,9 @@ generate_tab <- function(df, site) {
 server <- function(input, output) {
   df <-
     fread(sprintf("%s/data/results.csv", OUTPUT_DIR_FROM_SHINY))
-  df <-
-    df[time >= as_date("2011-01-01")]  # Hide initial transient until system is at steady state
+  sites_dt <- rbindlist(lapply(SITES, as.data.table), idcol = "code")[, .(code, stable_date)]
+  df <- sites_dt[df, on=.(code)]
+  df <- df[ time >= stable_date]
   
   # Convert log(mean) and log(var) into mean and sd
   df[, c("detrended_abs", "intervention_abs") := .(exp(detrended + 0.5 * detrended_var),
@@ -263,6 +266,9 @@ server <- function(input, output) {
   })
   output$NCA3 <- renderUI({
     generate_tab(df, "NCA3")
+  })
+  output$SHDG <- renderUI({
+    generate_tab(df, "SHDG")
   })
   
   
