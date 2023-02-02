@@ -10,10 +10,10 @@ source("utils.R")
 
 ui <- navbarPage(
   "Newcastle and Gateshead CAZ",
-  useShinydashboard(),
   tabPanel("Live monitor",
            sidebarLayout(
              sidebarPanel(
+               useShinydashboard(),
                h3("Measuring the impact of the Newcastle and Gateshead Clean Air Zone"),
                h4("Newcastle & Gateshead CAZ"),
                HTML(
@@ -121,12 +121,14 @@ plot_detrended <- function(df) {
     add_lines(
       y =  ~ detrended_abs,
       name = "Detrended",
+      legendgroup='Detrended',
       color = I("#FF7F0E")
     ) %>%
     add_ribbons(
       ymin = ~ detrended_lower,
       ymax = ~ detrended_upper,
       name = "Detrended +/- 2sds",
+      legendgroup='Detrended',
       line = list(color = 'rgba(255, 127, 4, 0)'),
       fillcolor = 'rgba(255, 127, 4, 0.2)',
       showlegend = FALSE,
@@ -134,11 +136,13 @@ plot_detrended <- function(df) {
     ) %>%
     add_lines(y =  ~ bau,
               name = "Business-as-usual",
+              legendgroup='BAU',
               color = I("#2CA02C")) %>%
     add_ribbons(
       ymin = ~ bau_lower,
       ymax = ~ bau_upper,
       name = "BAU +/- 2sds",
+      legendgroup='BAU',
       line = list(color = 'rgba(44, 160, 44, 0)'),
       fillcolor = 'rgba(44, 160, 44, 0.2)',
       showlegend = FALSE,
@@ -176,7 +180,7 @@ plot_intervention <- function(df) {
     layout(
       xaxis = list(range = c(today() - months(3), today()),
                    title = ""),
-      yaxis = list(title = "% change in NO2 due to CAZ")
+      yaxis = list(title = "% change in NO2")
     )
 }
 
@@ -226,6 +230,10 @@ server <- function(input, output) {
   sites_dt <- rbindlist(lapply(SITES, as.data.table), idcol = "code")[, .(code, stable_date)]
   df <- sites_dt[df, on=.(code)]
   df <- df[ time >= stable_date]
+  # When have 0 measurements, don't plot detrended or intervention. The whole point of SSM is that
+  # we still have these latent estimates even when missing observations, but it's more intuitive
+  # for a general audience to not plot
+  df[ is.na(no2), `:=` (detrended=NA, detrended_var=NA, intervention=NA, intervention_var=NA)]
   
   # Convert log(mean) and log(var) into mean and sd
   df[, c("detrended_abs", "intervention_abs") := .(exp(detrended + 0.5 * detrended_var),
