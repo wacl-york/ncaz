@@ -240,14 +240,16 @@ server <- function(input, output) {
                                                    exp(intervention + 0.5 * intervention_var))]
   df[, c("detrended_sd", "intervention_sd") := .(sqrt(detrended_abs ** 2 * (exp(detrended_var) - 1)),
                                                  sqrt(intervention_abs ** 2 * (exp(intervention_var) - 1)))]
-  # Rescale detrending
-  df[, detrended_abs := detrended_abs - min(detrended_abs, na.rm = T)]
   
   # Create Business as Usual and relative intervention (%) columns
-  df[, c("bau", "intervention_mean_pct") := .(
+  df[, c("bau", "detrended_abs", "intervention_mean_pct") := .(
     ifelse(time >= intervention_date, no2 / intervention_abs, NA),
+    ifelse(time >= intervention_date, detrended_abs * intervention_abs, detrended_abs),
     (intervention_abs * 100) - 100
   )]
+
+  # Rescale detrending
+  df[, detrended_abs := detrended_abs - min(detrended_abs, na.rm = T)]
   
   # Create CIs
   df[, c("detrended_lower",
