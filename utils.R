@@ -1,4 +1,3 @@
-INTERVENTION_DATE <- as_datetime("2023-01-30")
 OUTPUT_DIR_FROM_SHINY <- "/mnt/shiny/ncaz"
 OUTPUT_DIR_FROM_CRON <- "/shared/storage/shiny0/ncaz"
 SITES <- list(

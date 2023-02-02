@@ -227,7 +227,7 @@ generate_tab <- function(df, site) {
 server <- function(input, output) {
   df <-
     fread(sprintf("%s/data/results.csv", OUTPUT_DIR_FROM_SHINY))
-  sites_dt <- rbindlist(lapply(SITES, as.data.table), idcol = "code")[, .(code, stable_date)]
+  sites_dt <- rbindlist(lapply(SITES, as.data.table), idcol = "code")[, .(code, stable_date, intervention_date=intervention)]
   df <- sites_dt[df, on=.(code)]
   df <- df[ time >= stable_date]
   # When have 0 measurements, don't plot detrended or intervention. The whole point of SSM is that
@@ -245,7 +245,7 @@ server <- function(input, output) {
   
   # Create Business as Usual and relative intervention (%) columns
   df[, c("bau", "intervention_mean_pct") := .(
-    ifelse(time >= INTERVENTION_DATE, no2 / intervention_abs, NA),
+    ifelse(time >= intervention_date, no2 / intervention_abs, NA),
     (intervention_abs * 100) - 100
   )]
   
