@@ -209,7 +209,7 @@ generate_tab <- function(df, site) {
       width = 6
     )
   first_sig <- this_df %>%
-    filter(intervention_upper < 1) %>%
+    filter(intervention_upper < 0) %>%
     slice_min(time, n = 1)
   if (nrow(first_sig) == 0)
     first_sig <- list(time = "Not yet")
