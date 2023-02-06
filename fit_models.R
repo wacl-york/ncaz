@@ -79,7 +79,7 @@ calculate_doy_average <- function(df, pollutant = "no2") {
 }
 
 calculate_fft_coefs <- function(x, n_coefs=1) {
-  # Calculate FFT coefficients of LOG NO2
+  # Calculate FFT coefficients of NO2
   fft_yearly_raw <- fft(x)
   fft_yearly <- fft_yearly_raw[2:(length(fft_yearly_raw)/2 + 1)]
   coefs <- array(0, dim=c(n_coefs*2, 1))
@@ -100,14 +100,14 @@ fit_univariate <- function(df, H=NA, Q=NA) {
   
   # Obtain prior for yearly Fourier
   yearly_smooth <- calculate_doy_average(df)
-  coefs_yearly <- calculate_fft_coefs(log(yearly_smooth))
+  coefs_yearly <- calculate_fft_coefs(yearly_smooth)
 
   a1 <- c(rep(0, n_covars),
           coefs_yearly[1:(n_yearly*2), 1])
   p1 <- matrix(0, nrow=n_covars_total, ncol=n_covars_total)
   p1inf <- diag(n_covars_total)
   
-  mod <- SSModel(log(df$no2) ~ 
+  mod <- SSModel(df$no2 ~ 
                  SSMtrend(1, Q=Q) +                                   
                  SSMregression(form,
                                a1=a1,
@@ -141,7 +141,7 @@ filt_central <- KFS(mod_central)
 p <- df_central |>
   filter(time < START_DATE) |>
   select(time, no2) |>
-  mutate(level = exp(filt_central$alphahat[, 'level'])) |>
+  mutate(level = filt_central$alphahat[, 'level']) |>
   filter(time >= '2015-01-01') |>
   mutate(level = level - min(level)) |>
   pivot_longer(-time) |>
@@ -167,9 +167,9 @@ manual_filtered <- do.call('rbind', lapply(2:length(results), function(i) {
 }))
 full_filtered <- filt_all$a[(filt_all$dims$n+1 - days_since_start):(filt_all$dims$n+1), ]
 
-exp(full_filtered)
-exp(manual_filtered)
-cbind(manual=exp(manual_filtered[, 8]), kfs=exp(full_filtered[, 8]))
+full_filtered
+manual_filtered
+cbind(manual=manual_filtered[, 8], kfs=full_filtered[, 8])
 
 #-------------------------------------
 # Fit models for all sites
