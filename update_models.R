@@ -60,7 +60,7 @@ for (site in names(SITES)) {
   }
   
   # Save states + results separately
-  saveRDS(this_states, sprintf("%s/states/univariate_%s.rds", OUTPUT_DIR, SITES[[site]]$human_readable))
+  saveRDS(this_states, sprintf("%s/states/univariate_%s.rds", OUTPUT_DIR, site))
   
   df_to_save <- this_df |>
                   mutate(code = site,
