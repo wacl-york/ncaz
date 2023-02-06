@@ -138,7 +138,7 @@ mod_central <- fit_univariate(df_central |> filter(time < START_DATE ))
 filt_central <- KFS(mod_central)
 
 # Sanity check on states
-df_central |>
+p <- df_central |>
   filter(time < START_DATE) |>
   select(time, no2) |>
   mutate(level = exp(filt_central$alphahat[, 'level'])) |>
