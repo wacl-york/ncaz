@@ -1,4 +1,5 @@
 library(shiny)
+library(bslib)
 library(shinydashboard)
 library(shinyWidgets)
 library(shinycssloaders)
@@ -10,6 +11,7 @@ source("utils.R")
 DISCLAIMER <- "Disclaimer: the estimates shown here are not validated and are still undergoing active research, as such they should not be treated as definitive and should be viewed with caution."
 
 ui <- navbarPage(
+  theme=bs_theme(bootswatch="flatly", version=5),
   "UK Clean Air Zone monitors",
   
   tabPanel("Newcastle & Gateshead",
