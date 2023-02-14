@@ -77,7 +77,7 @@ update_univariate <- function(model,
   Z[1, 8] <- 1
 
   # KFAS behaviour on NA is to not update the states or covariance matrix
-  if (any(is.na(Z))) {
+  if (any(is.na(Z)) || is.na(newdata$no2)) {
     return(
       list(a = alpha, P = P)
     )
