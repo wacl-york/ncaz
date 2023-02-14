@@ -64,15 +64,9 @@ update_univariate <- function(model,
   if (is.null(alpha)) {
     alpha <- t(t(model$att[model$dims$n,]))
   }
-  # Z Needs to handle newdata!
 
-  # time-update alpha and P
-  # NB: not updating alpha since it should be T*alpha + Bu_k, but T is diagonal and u_k is 0
-  # Likewise this should technically be T * P * t(T) + Q but the T is redundant as diagonal
-  P <- P + model$model$Q[, , 1]
-  
-  Z <- array(dim = c(1, 8))
   # Temp, ws, windx, windy, intervention, yearly-sin, yearly-cos, level
+  Z <- array(dim = c(1, 8))
   Z[1, 1] <- newdata$air_temp
   Z[1, 2] <- log(newdata$ws)
   Z[1, 3] <- cos(2 * pi * newdata$wd / 360)
@@ -81,17 +75,29 @@ update_univariate <- function(model,
   Z[1, 6] <- sin(2 * pi * (yday(newdata$time) / 365))
   Z[1, 7] <- cos(2 * pi * (yday(newdata$time) / 365))
   Z[1, 8] <- 1
-  
+
+  # KFAS behaviour on NA is to not update the states or covariance matrix
+  if (any(is.na(Z))) {
+    return(
+      list(a = alpha, P = P)
+    )
+  }
+
+  # time-update alpha and P
+  # NB: not updating alpha since it should be T*alpha + Bu_k, but T is diagonal and u_k is 0
+  # Likewise this should technically be T * P * t(T) + Q but the T is redundant as diagonal
+  P <- P + model$model$Q[, , 1]
+
   H <- model$model$H[, , 1]
   # Most recent observation
   y <- log(newdata$no2)
-  
+
   # Get: P_t|t-1, alpha_t|t-1, Z_t, R_t
   # Calculate kalman gain as:
-  K = P %*% t(Z) %*% (Z %*% P %*% t(Z) + H) ^ -1
-  alpha_update = alpha + K %*% (y - Z %*% alpha)
-  P_update = (diag(8) - K %*% Z) %*% P
-  
+  K <- P %*% t(Z) %*% (Z %*% P %*% t(Z) + H) ^ -1
+  alpha_update <- alpha + K %*% (y - Z %*% alpha)
+  P_update <- (diag(8) - K %*% Z) %*% P
+
   list(a = alpha_update,
        P = P_update)
 }
