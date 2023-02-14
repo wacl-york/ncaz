@@ -84,7 +84,7 @@ update_univariate <- function(model,
   
   H <- model$model$H[, , 1]
   # Most recent observation
-  y <- log(newdata$no2)
+  y <- newdata$no2
   
   # Get: P_t|t-1, alpha_t|t-1, Z_t, R_t
   # Calculate kalman gain as:

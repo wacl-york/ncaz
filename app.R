@@ -225,7 +225,7 @@ plot_detrended <- function(df) {
               name = "Measured",
               color = I("#1F77B4")) %>%
     add_lines(
-      y =  ~ detrended_abs,
+      y =  ~ detrended,
       name = "Detrended",
       legendgroup='Detrended',
       color = I("#FF7F0E")
@@ -269,14 +269,14 @@ plot_detrended <- function(df) {
 plot_intervention <- function(df) {
   plot_ly(df, x =  ~ time) %>%
     add_lines(
-      y =  ~ intervention_mean_pct,
+      y =  ~ intervention,
       name = "Intervention effect",
       color = I("#9467BD"),
       showlegend = FALSE
     ) %>%
     add_ribbons(
-      ymin = ~ intervention_lower_pct,
-      ymax = ~ intervention_upper_pct,
+      ymin = ~ intervention_lower,
+      ymax = ~ intervention_upper,
       name = "Intervention effect +/- 2sds",
       line = list(color = 'rgba(148, 103, 189, 0)'),
       fillcolor = 'rgba(148, 103, 189, 0.2)',
@@ -291,7 +291,7 @@ plot_intervention <- function(df) {
 }
 
 generate_tab <- function(df, site) {
-  this_df <- df[code == site & !is.na(detrended_abs)]
+  this_df <- df[code == site & !is.na(detrended)]
   p1 <- plot_detrended(this_df)
   p2 <- plot_intervention(this_df)
   
@@ -308,14 +308,14 @@ generate_tab <- function(df, site) {
   curr_effect <- this_df %>% slice_max(time, n = 1)
   obj2 <-
     valueBox(
-      sprintf("%.0f%%", curr_effect$intervention_mean_pct),
+      sprintf("%.1fppb", curr_effect$intervention),
       subtitle = sprintf("Intervention effect as of %s", curr_effect$time),
       icon = icon("bolt-lightning"),
       color = "green",
       width = 6
     )
   first_sig <- this_df %>%
-    filter(intervention_upper < 1) %>%
+    filter(intervention_upper < 0) %>%
     slice_min(time, n = 1)
   if (nrow(first_sig) == 0)
     first_sig <- list(time = "Not yet")
@@ -341,40 +341,39 @@ server <- function(input, output) {
   # for a general audience to not plot
   df[ is.na(no2), `:=` (detrended=NA, detrended_var=NA, intervention=NA, intervention_var=NA)]
   
-  # Convert log(mean) and log(var) into mean and sd
-  df[, c("detrended_abs", "intervention_abs") := .(exp(detrended + 0.5 * detrended_var),
-                                                   exp(intervention + 0.5 * intervention_var))]
-  df[, c("detrended_sd", "intervention_sd") := .(sqrt(detrended_abs ** 2 * (exp(detrended_var) - 1)),
-                                                 sqrt(intervention_abs ** 2 * (exp(intervention_var) - 1)))]
-  
-  # Create Business as Usual and relative intervention (%) columns
-  df[, c("bau", "detrended_abs", "intervention_mean_pct") := .(
-    ifelse(time >= intervention_date, no2 / intervention_abs, NA),
-    ifelse(time >= intervention_date, detrended_abs * intervention_abs, detrended_abs),
-    (intervention_abs * 100) - 100
+  # Create Business as Usual and update the Detrended column to include the intervention
+  # (otherwise it will remain pretty much static and be misleading)
+  # Also hide the intervention until the intervention date, i.e. so as to not plot any 
+  # variance that might have been used to start the filtering off
+  df[, c("bau", "detrended", "intervention", "intervention_var") := .(
+    ifelse(time >= intervention_date, no2 - intervention, NA),
+    ifelse(time >= intervention_date, detrended + intervention, detrended),
+    ifelse(time >= intervention_date, intervention, NA),
+    ifelse(time >= intervention_date, intervention_var, NA)
   )]
+  
+  # SSMs output variance, but SDs are used for CIs
+  df[, c("detrended_sd", "intervention_sd") := .(sqrt(detrended_var),
+                                                 sqrt(intervention_var))]
+  
 
   # Rescale detrending
-  df[, detrended_abs := detrended_abs - min(detrended_abs, na.rm = T)]
+  df[, detrended := detrended - min(detrended, na.rm = T)]
   
   # Create CIs
   df[, c("detrended_lower",
          "intervention_lower",
-         "bau_lower",
-         "intervention_lower_pct") := .(
-           detrended_abs - 2 * detrended_sd,
-           intervention_abs - 2 * intervention_sd,
-           bau * (intervention_abs - 2 * intervention_sd),
-           (intervention_abs - 2 * intervention_sd) * 100 - 100
+         "bau_lower") := .(
+           detrended - 2 * detrended_sd,
+           intervention - 2 * intervention_sd,
+           bau -  2 * intervention_sd  # TODO should this also take into account H?
          )]
   df[, c("detrended_upper",
          "intervention_upper",
-         "bau_upper",
-         "intervention_upper_pct") := .(
-           detrended_abs + 2 * detrended_sd,
-           intervention_abs + 2 * intervention_sd,
-           bau * (intervention_abs + 2 * intervention_sd),
-           (intervention_abs + 2 * intervention_sd) * 100 - 100
+         "bau_upper") := .(
+           detrended + 2 * detrended_sd,
+           intervention + 2 * intervention_sd,
+           bau + 2 * intervention_sd  # TODO should this also take into account H?
          )]
   
   output$NEWC <- renderUI({
