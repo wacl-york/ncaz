@@ -3,3 +3,12 @@
   font-size: 18px;
   font-weight: bold;
 }
+
+div#custom_q_ui div {
+  margin-bottom: 0rem;
+}
+
+.custom_q_row {
+  align-items: flex-end;
+  margin-bottom: 2rem;
+}

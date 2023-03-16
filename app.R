@@ -112,7 +112,7 @@ load_dataset <- function(site) {
             filter(time > max(df_1$time))
   
   # Combine
-  rbind(df_1, df_2)
+  rbindlist(list(df_1, df_2))
 }
 
 estimateQ <- function(df, transform, intervention, date) {
@@ -233,7 +233,7 @@ ui <- navbarPage(
        sidebarPanel(
          p("This page allows you to experiment with the modelling parameters to identify
            their effect on the resulting detrended series. You can generate a detrended model
-           from one of the 74 AURN sites that had 90% NO2 availability since 2015."),
+           from one of the 49 AURN sites that had 75% NO2 availability since 2015."),
          selectInput("custom_site", "AURN location",
                         choices=c("Choose a site"="", ALL_SITES)),
          radioButtons("custom_transform", "Model type",
@@ -253,7 +253,7 @@ ui <- navbarPage(
              width=6,
              shinyjs::disabled(actionButton("estimate_q", "Estimate automatically"))
            )
-         ),
+         ) |> tagAppendAttributes(class = "custom_q_row"),
          shinyjs::disabled(actionButton("fit", "Fit model"))
        ),
        mainPanel(
@@ -659,13 +659,14 @@ server <- function(input, output) {
   }, ignoreInit = TRUE)
   
   output$custom_q_ui <- renderUI({
-    numericInput("custom_q", label="Standard deviation of how much NO2 varies day-to-day", value = NA, min = 0, max=100)
+    numericInput("custom_q", label="Day-to-day NO2 standard deviation", value = NA, min = 0, max=100, step=0.5)
   })
   
   observeEvent(input$custom_transform, {
-    lab <- "Standard deviation of how much NO2 varies day-to-day"
+    lab <- "Day-to-day NO2 standard deviation"
     updateNumericInput(inputId="custom_q",
-                       label=sprintf("%s (%s)", lab, TRANSFORMS[[input$custom_transform]][['units']]))
+                       label=sprintf("%s (%s)", lab, TRANSFORMS[[input$custom_transform]][['units']]),
+                       value=character(0))
   }, ignoreNULL = TRUE)
   
   # Only enable the automatic identification of Q when have filled in all the values
@@ -703,10 +704,14 @@ server <- function(input, output) {
     hash <- dataset_hash(input$custom_site, input$custom_transform, input$custom_intervention, input$custom_date)
     if (!hash %in% names(estimated_Qs)) {
       if (! input$custom_site %in% names(datasets)) {
-        datasets[[input$custom_site]] <<- load_dataset(input$custom_site)
+        withProgress(message = 'Downloading data from AURN...', value= 0.33, {
+          datasets[[input$custom_site]] <<- load_dataset(input$custom_site)
+        })
       }
       # Estimate Q, but NB: Q is used as a variance in KFAS, and also if we have a log transform we want to get back to pcts
-      raw_q <<- estimateQ(datasets[[input$custom_site]], input$custom_transform, input$custom_intervention, input$custom_date)
+      withProgress(message = 'Estimating variance...', value= 0.66, {
+        raw_q <- estimateQ(datasets[[input$custom_site]], input$custom_transform, input$custom_intervention, input$custom_date)
+      })
       estimated_Qs[[hash]] <<- Q_to_sd(raw_q, TRANSFORMS[[input$custom_transform]][['inverse_func']], input$custom_transform)
     }
       
