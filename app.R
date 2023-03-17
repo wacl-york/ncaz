@@ -20,16 +20,32 @@ SITES_META <- readRDS(sprintf("%s/aurn_sites_meta.rds", DATA_DIR))
 ALL_SITES <- SITES_META$code
 names(ALL_SITES) <- SITES_META$site
 
+ratio_to_pct_difference <- function(x) {
+  (x * 100) - 100
+}
+
 TRANSFORMS <- list(
   "Absolute"= list(
     func=identity,
     inverse_func=identity,
-    units="ppb"
+    units="ppb",
+    subtract_func=`-`,
+    add_func=`+`,
+    mean_func=function(mean, var) mean,
+    sd_func=function(mean, var) sqrt(var),
+    int_post_func=identity,
+    sig_threshold=0
   ),
   "Relative"= list(
     func=log,
     inverse_func=exp,
-    units="%"
+    units="%",
+    subtract_func=`/`,
+    add_func=`*`,
+    mean_func=function(mean, var) exp(mean + 0.5 * var),
+    sd_func=function(mean, var) sqrt(mean**2 * (exp(var)-1)),
+    int_post_func=ratio_to_pct_difference,
+    sig_threshold=1
   )
 )
 
@@ -46,10 +62,6 @@ sd_to_Q <- function(q_sd, transform, transform_type) {
     q_sd <- q_sd/100 + 1
   }
   (transform(q_sd))**2
-}
-
-ratio_to_pct_difference <- function(x) {
-  (x * 100) - 100
 }
 
 dataset_hash <- function(location, transform, intervention, date) {
@@ -507,54 +519,34 @@ generate_custom_tab <- function(df, transform, int_start, int_end) {
     int_end <- max(df$time)
   }
   
-  # If relative, convert from log scale to additive
-  if (transform == 'Relative') {
-    df <- df |>
-            mutate(
-              detrended = exp(detrended + 0.5 * detrended_var),
-              intervention = exp(intervention + 0.5 * intervention_var),
-              detrended_sd = sqrt(detrended**2 * (exp(detrended_var) - 1)),
-              intervention_sd = sqrt(intervention**2 * (exp(intervention_var) - 1))
-            )
-  } else {
-    # Absolute just requires taking sqrt to get to SD
-    df <- df |>
-            mutate(detrended_sd = sqrt(detrended_var),
-                   intervention_sd = sqrt(intervention_var)
-                   )
-  }
-  
-  # Adjust for intervention to get Business as usual (BAU) and detrended
-  # adjusting for intervention
-  bau_func <- if (transform == 'Relative') `/` else `-`
-  detrended_func <- if (transform == 'Relative') `*` else `+`
-  # Create CIs
+  # Preprocess!
   df <- df |>
           mutate(
-            bau=ifelse(time >= int_start & time <= int_end, bau_func(no2, intervention), NA),
-            detrended=ifelse(time >= int_start & time <= int_end, detrended_func(detrended, intervention), detrended),
+            # Convert from raw mean and var to mean and SD
+            detrended = transform$mean_func(detrended, detrended_var),
+            intervention = transform$mean_func(intervention, intervention_var),
+            detrended_sd = transform$sd_func(detrended, detrended_var),
+            intervention_sd = transform$sd_func(intervention, intervention_var),
+            # Calculate BAU and adjust detrended for intervention for plot
+            bau=ifelse(time >= int_start & time <= int_end, transform$subtract_func(no2, intervention), NA),
+            detrended=ifelse(time >= int_start & time <= int_end, transform$add_func(detrended, intervention), detrended),
+            # CIs
             detrended_lower = detrended- 2 * detrended_sd,
             intervention_lower = intervention- 2 * intervention_sd,
-            bau_lower = detrended_func(bau, intervention_lower),
+            bau_lower = transform$add_func(bau, intervention_lower),
             detrended_upper = detrended + 2 * detrended_sd,
             intervention_upper = intervention + 2 * intervention_sd,
-            bau_upper = detrended_func(bau, intervention_upper)
-          )
+            bau_upper = transform$add_func(bau, intervention_upper),
+            # Get intervention into human-readable format
+            intervention_mean_pct = transform$int_post_func(intervention),
+            intervention_lower_pct = transform$int_post_func(intervention_lower),
+            intervention_upper_pct = transform$int_post_func(intervention_upper)
+          ) |>
+          rename(detrended_abs = detrended)  # Rename to be compatible with legacy code
   
   # Rescale detrending
   #min_once_settled <- df[ time >= (min(time) + years(1)), min(detrended, na.rm=T)]
   #df[, detrended := detrended - min_once_settled ]
-  
-  
-  # Plot function expects to have _pct columns
-  func <- if (transform == 'Relative') ratio_to_pct_difference else identity
-  df <- df |>
-          mutate(
-            intervention_mean_pct = func(intervention),
-            intervention_lower_pct = func(intervention_lower),
-            intervention_upper_pct = func(intervention_upper)
-          ) |>
-          rename(detrended_abs = detrended)
   
   # Currently have time, detrended, intervention, adjusted
   p1 <- plot_detrended(df |> filter(time > (min(time) + years(1))))
@@ -570,20 +562,17 @@ generate_custom_tab <- function(df, transform, int_start, int_end) {
     layout(hovermode = "x unified")
   
   # Cards displaying the current intervention effect and the date when it went statistically significant
-  units <- if (transform == 'Relative') '%' else 'ppb'
-  sig_threshold <- if (transform == 'Relative') 1 else 0
-  
   curr_effect <- df %>% slice_max(time, n = 1)
   obj2 <-
     valueBox(
-      sprintf("%.0f%s", curr_effect$intervention_mean_pct, units),
+      sprintf("%.0f%s", curr_effect$intervention_mean_pct, transform$units),
       subtitle = sprintf("Intervention effect as of %s", curr_effect$time),
       icon = icon("bolt-lightning"),
       color = "green",
       width = 6
     )
   first_sig <- df %>%
-    filter(intervention_upper < sig_threshold) %>%
+    filter(intervention_upper < transform$sig_threshold) %>%
     slice_min(time, n = 1)
   if (nrow(first_sig) == 0)
     first_sig <- list(time = "Not yet")
@@ -774,7 +763,7 @@ server <- function(input, output) {
       int_start <- if (intervention == 'Yes') date[1] else NULL
       int_end <- if (intervention == 'Yes') date[2] else NULL
       generate_custom_tab(current_filter(), 
-                          isolate(input$custom_transform),
+                          TRANSFORMS[[isolate(input$custom_transform)]],
                           int_start,
                           int_end)
     }
