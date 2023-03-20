@@ -395,7 +395,7 @@ ui <- navbarPage(
   ),
 )
 
-plot_detrended <- function(df) {
+plot_detrended <- function(df, x_start, x_end) {
   plot_ly(df, x =  ~ time) %>%
     add_lines(y =  ~ no2,
               name = "Measured",
@@ -434,7 +434,7 @@ plot_detrended <- function(df) {
       displaylogo=FALSE
     ) %>%
     layout(
-      xaxis = list(range = c(today() - months(1), today()),
+      xaxis = list(range = c(x_start, x_end),
                    title = ""),
       yaxis = list(title = "NO2 (ppb)"),
       legend = list(
@@ -445,7 +445,7 @@ plot_detrended <- function(df) {
     )
 }
 
-plot_intervention <- function(df) {
+plot_intervention <- function(df, x_start, x_end) {
   plot_ly(df, x =  ~ time) %>%
     add_lines(
       y =  ~ intervention_mean_pct,
@@ -466,7 +466,7 @@ plot_intervention <- function(df) {
       displaylogo=FALSE
     ) %>%
     layout(
-      xaxis = list(range = c(today() - months(3), today()),
+      xaxis = list(range = c(x_start, x_end),
                    title = ""),
       yaxis = list(title = "% change in NO2")
     )
@@ -474,8 +474,8 @@ plot_intervention <- function(df) {
 
 generate_tab <- function(df, site) {
   this_df <- df[code == site & !is.na(detrended_abs)]
-  p1 <- plot_detrended(this_df)
-  p2 <- plot_intervention(this_df)
+  p1 <- plot_detrended(this_df, x_start=today() - months(1), today())
+  p2 <- plot_intervention(this_df, x_start=today() - months(1), today())
   
   # Time-series of detrended NO2 + intervention effect
   obj1 <-
@@ -515,8 +515,13 @@ generate_tab <- function(df, site) {
 generate_custom_tab <- function(df, transform, int_start, int_end) {
   if (is.null(int_start)) {
     df <- df |> mutate(intervention = 0, intervention_var = 0)
+    x_start <- today() - months(1)
+    x_end <- today()
     int_start <- min(df$time)
     int_end <- max(df$time)
+  } else {
+    x_start <- int_start
+    x_end <- int_end
   }
   
   # Preprocess!
@@ -549,8 +554,8 @@ generate_custom_tab <- function(df, transform, int_start, int_end) {
   #df[, detrended := detrended - min_once_settled ]
   
   # Currently have time, detrended, intervention, adjusted
-  p1 <- plot_detrended(df |> filter(time > (min(time) + years(1))))
-  p2 <- plot_intervention(df |> filter(time > (min(time) + years(1))))
+  p1 <- plot_detrended(df |> filter(time > (min(time) + years(1))), x_start, x_end)
+  p2 <- plot_intervention(df |> filter(time > (min(time) + years(1))), x_start, x_end)
   
   # Time-series of detrended NO2 + intervention effect
   obj1 <-
