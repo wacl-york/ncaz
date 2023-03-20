@@ -414,7 +414,8 @@ plot_detrended <- function(df, x_start, x_end) {
       line = list(color = 'rgba(255, 127, 4, 0)'),
       fillcolor = 'rgba(255, 127, 4, 0.2)',
       showlegend = FALSE,
-      hoverinfo = "none"
+      hoverinfo = "none",
+      connectgaps=TRUE
     ) %>%
     add_lines(y =  ~ bau,
               name = "Business-as-usual",
@@ -428,7 +429,8 @@ plot_detrended <- function(df, x_start, x_end) {
       line = list(color = 'rgba(44, 160, 44, 0)'),
       fillcolor = 'rgba(44, 160, 44, 0.2)',
       showlegend = FALSE,
-      hoverinfo = "none"
+      hoverinfo = "none",
+      connectgaps=TRUE
     ) %>%
     config(
       displaylogo=FALSE
@@ -460,7 +462,8 @@ plot_intervention <- function(df, x_start, x_end) {
       line = list(color = 'rgba(148, 103, 189, 0)'),
       fillcolor = 'rgba(148, 103, 189, 0.2)',
       showlegend = FALSE,
-      hoverinfo = "none"
+      hoverinfo = "none",
+      connectgaps=TRUE
     ) %>%
     config(
       displaylogo=FALSE
