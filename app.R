@@ -3,12 +3,150 @@ library(bslib)
 library(shinydashboard)
 library(shinyWidgets)
 library(shinycssloaders)
+library(shinyjs)
 library(dplyr)
 library(data.table)
 library(lubridate)
 library(plotly)
+library(openair)
+library(tidytable)
+library(KFAS)
+library(digest)
 source("utils.R")
 DISCLAIMER <- "Disclaimer: the estimates shown here are not validated and are still undergoing active research, as such they should not be treated as definitive and should be viewed with caution."
+
+DATA_DIR <- sprintf("%s/data", OUTPUT_DIR_FROM_SHINY)
+SITES_META <- readRDS(sprintf("%s/aurn_sites_meta.rds", DATA_DIR))
+ALL_SITES <- SITES_META$code
+names(ALL_SITES) <- SITES_META$site
+
+ratio_to_pct_difference <- function(x) {
+  (x * 100) - 100
+}
+
+TRANSFORMS <- list(
+  "Absolute"= list(
+    func=identity,
+    inverse_func=identity,
+    units="ppb",
+    subtract_func=`-`,
+    add_func=`+`,
+    mean_func=function(mean, var) mean,
+    sd_func=function(mean, var) sqrt(var),
+    int_post_func=identity,
+    sig_threshold=0
+  ),
+  "Relative"= list(
+    func=log,
+    inverse_func=exp,
+    units="%",
+    subtract_func=`/`,
+    add_func=`*`,
+    mean_func=function(mean, var) exp(mean + 0.5 * var),
+    sd_func=function(mean, var) sqrt(mean**2 * (exp(var)-1)),
+    int_post_func=ratio_to_pct_difference,
+    sig_threshold=1
+  )
+)
+
+Q_to_sd <- function(q, transform, transform_type) {
+  q_sd <- transform(sqrt(q))
+  if (transform_type == 'Relative') {
+    q_sd <- (q_sd * 100) - 100
+  }
+  q_sd
+}
+
+sd_to_Q <- function(q_sd, transform, transform_type) {
+  if (transform_type == 'Relative') {
+    q_sd <- q_sd/100 + 1
+  }
+  (transform(q_sd))**2
+}
+
+dataset_hash <- function(location, transform, intervention, date) {
+  str <- if (intervention == 'Yes') {
+    paste(location, transform, intervention, date[1], date[2], sep='_')
+  } else {
+    paste(location, transform, intervention, sep='_')
+  }
+  digest(str)
+}
+
+model_hash <- function(location, transform, intervention, date, Q) {
+  str <- if (intervention == 'Yes') {
+    paste(location, transform, intervention, date[1], date[2], Q, sep='_')
+  } else {
+    paste(location, transform, intervention, Q, sep='_')
+  }
+  digest(str)
+}
+
+preprocess_aurn <- function(df) {
+  df %>%
+    mutate(
+      time = as_datetime(as_date(date)),
+      wind_y = ws * sin(2 * pi * wd / 360),
+      wind_x = ws * cos(2 * pi * wd / 360)
+    ) %>%
+    group_by(code, time) %>%
+    summarise(
+      no2 = mean(no2, na.rm = T),
+      air_temp = mean(air_temp, na.rm = T),
+      wind_y = mean(wind_y, na.rm = T),
+      wind_x = mean(wind_x, na.rm = T),
+      ws = mean(ws, na.rm = T)
+    ) %>%
+    ungroup() %>%
+    # Convert vector wind back to polar
+    mutate(
+      wd = as.vector(atan2(wind_y, wind_x) * 360 / 2 / pi),
+      wd = ifelse(wd < 0, wd + 360, wd),
+      ws_vec = (wind_x ^ 2 + wind_y ^ 2) ^ 0.5,
+      wind_y_nows = sin(2 * pi * wd / 360),
+      wind_x_nows = cos(2 * pi * wd / 360),
+      sin_year = sin(2 * pi * (yday(time) / 365)),
+      cos_year = cos(2 * pi * (yday(time) / 365))
+    )
+}
+
+load_dataset <- function(site) {
+  # Firstly load the training data up until mid January
+  fn <- sprintf("%s/sites_training_2015_2023-01-26/%s.rds", DATA_DIR, site)
+  df_1 <- readRDS(fn) |> select(-intervention)
+  
+  # Then load AURN data to fill in the gaps up until today
+  years_to_load <- seq(year(max(df_1$time)), year(today()), by=1)
+  df_2 <- importAURN(site = site, year=years_to_load) |> as.data.table()
+  
+  # Process AURN data
+  df_2 <- preprocess_aurn(df_2) |>
+            filter(time > max(df_1$time))
+  
+  # Combine
+  rbindlist(list(df_1, df_2))
+}
+
+estimateQ <- function(df, transform, intervention, date) {
+  # HOWEVER, if also have intervention then don't want to use intervention in training!
+  # Maybe should split data into training and test
+  # So if have intervention then training date is up until the day before
+  # If have no intervention then training date is end of 2019
+  int_start <- if (intervention == 'Yes') date[1] else NULL
+  int_end <- if (intervention == 'Yes') date[2] else NULL
+  train_end <- if (intervention == 'Yes') date[1] - days(1) else as_datetime('2019-12-31')
+  mod <- fit_univariate(df |> filter(time <= train_end),
+                        'no2',
+                        yearly_prior_col = 'no2',
+                        transform_func=TRANSFORMS[[transform]][['func']],
+                        intervention_date=int_start,
+                        intervention_end=int_end
+                        )
+  level_col <- 7 + as.numeric(intervention == 'Yes')
+  mod$Q[level_col, level_col, 1]
+}
+  
+
 
 ui <- navbarPage(
   theme=bs_theme(bootswatch="flatly", version=5),
@@ -18,6 +156,7 @@ ui <- navbarPage(
            sidebarLayout(
              sidebarPanel(
                useShinydashboard(),
+               useShinyjs(),
                tags$head(
                  tags$link(rel="stylesheet", type="text/css", href="styles.css")
                ),
@@ -65,10 +204,6 @@ ui <- navbarPage(
   tabPanel("Sheffield",
            sidebarLayout(
              sidebarPanel(
-               useShinydashboard(),
-               tags$head(
-                 tags$link(rel="stylesheet", type="text/css", href="styles.css")
-               ),
                h4("Sheffield CAZ"),
                HTML(
                  "The Sheffield CAZ covers the inner ring road and the city centre."
@@ -103,6 +238,47 @@ ui <- navbarPage(
                         withSpinner(uiOutput("SHDG")))
              ))
            )),
+  tabPanel(
+    "Fit a custom model",
+    h3("Fit a custom model"),
+    sidebarLayout(
+       sidebarPanel(
+         p("This page allows you to experiment with the modelling parameters to identify
+           their effect on the resulting detrended series. You can generate a detrended model
+           from one of the 49 AURN sites that had 75% NO2 availability since 2015."),
+         selectInput("custom_site", "AURN location",
+                        choices=c("Choose a site"="", ALL_SITES)),
+         tags$div(title=paste("Absolute means that the intervention reduction is always the same,",
+                              "but a relative effect is proortional to the NO2 background.",
+                              "I.e. an absolute effect of 5 ppb is the same if the background is",
+                              "10ppb or 50ppb, but a 5% relative effect results in a 0.5ppb",
+                              "drop in a 10ppb background, but 2.5ppb when the background is 50ppb"),
+           radioButtons("custom_transform", "Model type (hover for details)",
+                        c("Absolute", "Relative"), inline=TRUE,
+                        selected=character(0))
+         ),
+         radioButtons("custom_intervention", "Model an intervention?",
+                      c("Yes", "No"), inline=TRUE,
+                      selected=character(0)),
+         shinyjs::hidden(dateRangeInput("custom_date", "Intervention range",
+                        start=today() - weeks(1), end=today())),
+         fluidRow(
+           column(
+             width=6,
+             uiOutput("custom_q_ui")
+           ),
+           column(
+             width=6,
+             shinyjs::disabled(actionButton("estimate_q", "Estimate automatically"))
+           )
+         ) |> tagAppendAttributes(class = "custom_q_row"),
+         shinyjs::disabled(actionButton("fit", "Fit model"))
+       ),
+       mainPanel(
+         withSpinner(uiOutput("custom"))
+       )
+    )
+  ),
   tabPanel(
     "Methodology",
    h3("Motivation"),
@@ -254,8 +430,11 @@ plot_detrended <- function(df) {
       showlegend = FALSE,
       hoverinfo = "none"
     ) %>%
+    config(
+      displaylogo=FALSE
+    ) %>%
     layout(
-      xaxis = list(range = c(today() - months(3), today()),
+      xaxis = list(range = c(today() - months(1), today()),
                    title = ""),
       yaxis = list(title = "NO2 (ppb)"),
       legend = list(
@@ -282,6 +461,9 @@ plot_intervention <- function(df) {
       fillcolor = 'rgba(148, 103, 189, 0.2)',
       showlegend = FALSE,
       hoverinfo = "none"
+    ) %>%
+    config(
+      displaylogo=FALSE
     ) %>%
     layout(
       xaxis = list(range = c(today() - months(3), today()),
@@ -330,9 +512,84 @@ generate_tab <- function(df, site) {
   tagList(fluidRow(obj1), br(), br(), fluidRow(obj2, obj3))
 }
 
+generate_custom_tab <- function(df, transform, int_start, int_end) {
+  if (is.null(int_start)) {
+    df <- df |> mutate(intervention = 0, intervention_var = 0)
+    int_start <- min(df$time)
+    int_end <- max(df$time)
+  }
+  
+  # Preprocess!
+  df <- df |>
+          mutate(
+            # Convert from raw mean and var to mean and SD
+            detrended = transform$mean_func(detrended, detrended_var),
+            intervention = transform$mean_func(intervention, intervention_var),
+            detrended_sd = transform$sd_func(detrended, detrended_var),
+            intervention_sd = transform$sd_func(intervention, intervention_var),
+            # Calculate BAU and adjust detrended for intervention for plot
+            bau=ifelse(time >= int_start & time <= int_end, transform$subtract_func(no2, intervention), NA),
+            detrended=ifelse(time >= int_start & time <= int_end, transform$add_func(detrended, intervention), detrended),
+            # CIs
+            detrended_lower = detrended- 2 * detrended_sd,
+            intervention_lower = intervention- 2 * intervention_sd,
+            bau_lower = transform$add_func(bau, intervention_lower),
+            detrended_upper = detrended + 2 * detrended_sd,
+            intervention_upper = intervention + 2 * intervention_sd,
+            bau_upper = transform$add_func(bau, intervention_upper),
+            # Get intervention into human-readable format
+            intervention_mean_pct = transform$int_post_func(intervention),
+            intervention_lower_pct = transform$int_post_func(intervention_lower),
+            intervention_upper_pct = transform$int_post_func(intervention_upper)
+          ) |>
+          rename(detrended_abs = detrended)  # Rename to be compatible with legacy code
+  
+  # Rescale detrending
+  #min_once_settled <- df[ time >= (min(time) + years(1)), min(detrended, na.rm=T)]
+  #df[, detrended := detrended - min_once_settled ]
+  
+  # Currently have time, detrended, intervention, adjusted
+  p1 <- plot_detrended(df |> filter(time > (min(time) + years(1))))
+  p2 <- plot_intervention(df |> filter(time > (min(time) + years(1))))
+  
+  # Time-series of detrended NO2 + intervention effect
+  obj1 <-
+    subplot(p1,
+            p2,
+            nrows = 2,
+            shareX = TRUE,
+            titleY = TRUE) %>%
+    layout(hovermode = "x unified")
+  
+  # Cards displaying the current intervention effect and the date when it went statistically significant
+  curr_effect <- df %>% slice_max(time, n = 1)
+  obj2 <-
+    valueBox(
+      sprintf("%.0f%s", curr_effect$intervention_mean_pct, transform$units),
+      subtitle = sprintf("Intervention effect as of %s", curr_effect$time),
+      icon = icon("bolt-lightning"),
+      color = "green",
+      width = 6
+    )
+  first_sig <- df %>%
+    filter(intervention_upper < transform$sig_threshold) %>%
+    slice_min(time, n = 1)
+  if (nrow(first_sig) == 0)
+    first_sig <- list(time = "Not yet")
+  obj3 <- valueBox(
+    sprintf("%s", first_sig$time),
+    subtitle = "When intervention was first statistically significant",
+    icon = icon("calendar"),
+    color = "green",
+    width = 6
+  )
+  
+  tagList(fluidRow(obj1), br(), br(), fluidRow(obj2, obj3))
+}
+
 server <- function(input, output) {
   df <-
-    fread(sprintf("%s/data/results.csv", OUTPUT_DIR_FROM_SHINY))
+    fread(sprintf("%s/results.csv", DATA_DIR))
   sites_dt <- rbindlist(lapply(SITES, as.data.table), idcol = "code")[, .(code, stable_date, intervention_date=intervention)]
   df <- sites_dt[df, on=.(code)]
   df <- df[ time >= stable_date]
@@ -387,6 +644,130 @@ server <- function(input, output) {
     generate_tab(df, "SHDG")
   })
   
+  ######## CUSTOM MODEL
+  observeEvent(input$custom_intervention, {
+    if (input$custom_intervention == 'Yes') {
+      shinyjs::show("custom_date")
+    } else {
+      shinyjs::hide("custom_date")
+    }
+  }, ignoreInit = TRUE)
+  
+  output$custom_q_ui <- renderUI({
+    numericInput("custom_q", label="Day-to-day NO2 standard deviation", value = NA, min = 0, max=100, step=0.5)
+  })
+  
+  observeEvent(input$custom_transform, {
+    lab <- "Day-to-day NO2 standard deviation"
+    updateNumericInput(inputId="custom_q",
+                       label=sprintf("%s (%s)", lab, TRANSFORMS[[input$custom_transform]][['units']]),
+                       value=character(0))
+  }, ignoreNULL = TRUE)
+  
+  # Only enable the automatic identification of Q when have filled in all the values
+  observeEvent({
+    input$custom_site
+    input$custom_transform
+    input$custom_intervention
+    input$custom_date
+  }, {
+    if (input$custom_site != '' && !is.null(input$custom_transform) && !is.null(input$custom_intervention)) {
+     shinyjs::enable("estimate_q")
+    }
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  
+  # Only enable Fit model button when all fields have been populated
+  observeEvent({
+    input$custom_site
+    input$custom_transform
+    input$custom_intervention
+    input$custom_date
+    input$custom_q
+  }, {
+    if (input$custom_site != '' && !is.null(input$custom_transform) && !is.null(input$custom_intervention) && !is.na(input$custom_q)) {
+     shinyjs::enable("fit")
+    }
+    
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  
+  estimated_Qs <- list()
+  datasets <- list()
+  models <- list()
+  current_filter <- reactiveVal()
+  
+  observeEvent(input$estimate_q, {
+    hash <- dataset_hash(input$custom_site, input$custom_transform, input$custom_intervention, input$custom_date)
+    if (!hash %in% names(estimated_Qs)) {
+      if (! input$custom_site %in% names(datasets)) {
+        withProgress(message = 'Downloading data from AURN...', value= 0.33, {
+          datasets[[input$custom_site]] <<- load_dataset(input$custom_site)
+        })
+      }
+      # Estimate Q, but NB: Q is used as a variance in KFAS, and also if we have a log transform we want to get back to pcts
+      withProgress(message = 'Estimating variance...', value= 0.66, {
+        raw_q <- estimateQ(datasets[[input$custom_site]], input$custom_transform, input$custom_intervention, input$custom_date)
+      })
+      estimated_Qs[[hash]] <<- Q_to_sd(raw_q, TRANSFORMS[[input$custom_transform]][['inverse_func']], input$custom_transform)
+    }
+      
+    q <- estimated_Qs[[hash]]
+    updateNumericInput(inputId="custom_q",
+                       value=q)
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
+  
+  observeEvent(input$fit, {
+    hash <- model_hash(input$custom_site, input$custom_transform, input$custom_intervention, input$custom_date, input$custom_q)
+    if (!hash %in% names(models)) {
+      
+      if (! input$custom_site %in% names(datasets)) {
+        datasets[[input$custom_site]] <<- load_dataset(input$custom_site)
+      }
+      df <- datasets[[input$custom_site]]
+      
+      # Estimate Q, but NB: Q is used as a variance in KFAS, and also if we have a log transform we want to get back to pcts
+      int_start <- if (input$custom_intervention == 'Yes') input$custom_date[1] else NULL
+      int_end <- if (input$custom_intervention == 'Yes') input$custom_date[2] else NULL
+      train_end <- if (input$custom_intervention == 'Yes') input$custom_date[1] - days(1) else as_datetime('2019-12-31')
+      # Fit H and model. If have already estimated Q then in theory can already know H but ah well
+      mod <- fit_univariate(df |> filter(time <= train_end),
+                            'no2',
+                            yearly_prior_col = 'no2',
+                            transform_func=TRANSFORMS[[input$custom_transform]][['func']],
+                            intervention_date=int_start,
+                            intervention_end=int_end,
+                            Q_level=sd_to_Q(input$custom_q, TRANSFORMS[[input$custom_transform]][['func']], input$custom_transform)
+                            )
+      # Now filter
+      filt_1 <- KFS(mod, filtering="state")
+      
+      filt_2 <- manual_filter(filt_1,
+                    df,
+                    first_date=train_end + days(1),
+                    intervention_start=int_start,
+                    intervention_end = int_end,
+                    transform_func = TRANSFORMS[[input$custom_transform]][['func']]
+                    ) |>
+      mutate(time=df$time, no2=df$no2)
+      models[[hash]] <<- filt_2
+    }
+    
+    # Update reactive value with latest filter
+    current_filter(models[[hash]])
+      
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
+  
+  output$custom <- renderUI({
+    if (!is.null(current_filter())) {
+      intervention <- isolate(input$custom_intervention)
+      date <- isolate(input$custom_date)
+      int_start <- if (intervention == 'Yes') date[1] else NULL
+      int_end <- if (intervention == 'Yes') date[2] else NULL
+      generate_custom_tab(current_filter(), 
+                          TRANSFORMS[[isolate(input$custom_transform)]],
+                          int_start,
+                          int_end)
+    }
+  })
   
 }
 
