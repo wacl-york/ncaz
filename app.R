@@ -537,7 +537,6 @@ generate_custom_tab <- function(df, transform, int_start, int_end) {
             intervention_sd = transform$sd_func(intervention, intervention_var),
             # Calculate BAU and adjust detrended for intervention for plot
             bau=ifelse(time >= int_start & time <= int_end, transform$subtract_func(no2, intervention), NA),
-            detrended=ifelse(time >= int_start & time <= int_end, transform$add_func(detrended, intervention), detrended),
             # CIs
             detrended_lower = detrended- 2 * detrended_sd,
             intervention_lower = intervention- 2 * intervention_sd,
@@ -613,9 +612,8 @@ server <- function(input, output) {
                                                  sqrt(intervention_abs ** 2 * (exp(intervention_var) - 1)))]
   
   # Create Business as Usual and relative intervention (%) columns
-  df[, c("bau", "detrended_abs", "intervention_mean_pct") := .(
+  df[, c("bau", "intervention_mean_pct") := .(
     ifelse(time >= intervention_date, no2 / intervention_abs, NA),
-    ifelse(time >= intervention_date, detrended_abs * intervention_abs, detrended_abs),
     (intervention_abs * 100) - 100
   )]
 
