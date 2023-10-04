@@ -141,7 +141,7 @@ calculate_doy_average <- function(df, pollutant = "no2") {
    # Now interpolate over the new year
   rbind(df_smooth |> mutate(year=1),
         df_smooth |> mutate(year=2)) |>
-    mutate(rownum = row_number(),
+    mutate(rownum = row_number(doy),
            interp = zoo::na.spline(smooth, na.rm=F)) |>
     filter(between(rownum, 30*2, (365.25*2)-(30*2))) |>
     distinct(doy, interp) |>
@@ -150,6 +150,17 @@ calculate_doy_average <- function(df, pollutant = "no2") {
     ungroup() |>
     arrange(doy) |>
     pull(interp)
+}
+
+calculate_hod_average <- function(df, pollutant = "no2") {
+  df$hod <- hour(df$time)
+  df$pollutant <- df[[pollutant]]
+  df_smooth <- df |>
+    group_by(hod) |>
+    summarise(pollutant = mean(pollutant, na.rm=T)) |>
+    ungroup()
+  
+  df_smooth$pollutant
 }
 
 # Function to calculate the FFT coefficients of a trend to use
@@ -168,6 +179,7 @@ calculate_fft_coefs <- function(x, n_coefs=1) {
 fit_univariate <- function(df, 
                            y_col,
                            yearly_prior_col = NULL,
+                           slope=FALSE,
                            H=NULL, 
                            a1_level=NULL,
                            P1_level=NULL,
@@ -179,23 +191,41 @@ fit_univariate <- function(df,
                            Q_regression=NULL,
                            transform_func=identity,
                            intervention_date=NULL,
-                           intervention_end=NULL
+                           intervention_end=NULL,
+                           remove_intercept=TRUE,
+                           covariate_formula="~ air_temp + log(ws) + wind_x_nows + wind_y_nows",
+                           n_day_of_year=1,
+                           n_hour_of_day=0
                            ) {
-  n_yearly <- 1
-  n_covars <- 4
+  trend_degree <- 1 + as.integer(slope)
+  n_covars <- str_count(covariate_formula, "\\+") + 1
   if (!is.null(intervention_date)) {
     n_covars <- n_covars + 1
   }
-  n_covars_total <- n_yearly*2 + n_covars
+  if (!remove_intercept) {
+    n_covars <- n_covars + 1
+  }
+  n_covars_total <- n_day_of_year*2 + n_covars + n_hour_of_day * 2
   # NB: removed days of week as it doesn't seem to be doing what I expect, 
   # i.e. it doesn't have any variance in Z-matrix
-  form_str <- "~ air_temp + log(ws) + wind_x_nows + wind_y_nows "
   if (!is.null(intervention_date)) {
-    form_str <- paste(form_str, "intervention", sep=" + ")
-    df[, intervention := time >= intervention_date & time <= intervention_end ]
+    covariate_formula <- paste(covariate_formula, "intervention", sep=" + ")
   }
-  form_str <- paste(form_str, "sin_year + cos_year", sep='+')
-  form <- as.formula(form_str)
+  if (n_day_of_year > 0) {
+    form_yearly <- paste(rep(c("sin_year", "cos_year"), n_day_of_year), 
+                         rep(seq(n_day_of_year), each=2),
+                         collapse="+",
+                         sep="")
+    covariate_formula <- paste(covariate_formula, form_yearly, sep='+')
+  }
+  if (n_hour_of_day > 0) {
+    form_hour <- paste(rep(c("sin_day", "cos_day"), n_hour_of_day), 
+                       rep(seq(n_hour_of_day), each=2),
+                       collapse="+",
+                       sep="")
+    covariate_formula <- paste(covariate_formula, form_hour, sep='+')
+  }
+  form <- as.formula(covariate_formula)
   
   if (is.null(H)) {
     H <- NA
@@ -203,16 +233,16 @@ fit_univariate <- function(df,
   
   # Level
   if (is.null(Q_level)) {
-    Q_level <- NA
+    Q_level <- lapply(1:trend_degree, function(x) NA)
   }
   if (is.null(a1_level)) {
-    a1_level <- 0
+    a1_level <- rep(0, trend_degree)
   }
   if (is.null(P1_level)) {
-    P1_level <- 0
+    P1_level <- matrix(0, ncol=trend_degree, nrow=trend_degree)
   }
   if (is.null(P1inf_level)) {
-    P1inf_level <- 1
+    P1inf_level <- diag(1, trend_degree)
   }
   
   # Regression
@@ -220,12 +250,21 @@ fit_univariate <- function(df,
     Q_regression <- matrix(0, ncol=n_covars_total, nrow=n_covars_total)
   }
   if (is.null(a1_regression)) {
-    # Obtain prior for yearly Fourier
-    yearly_smooth <- calculate_doy_average(df, yearly_prior_col)
-    coefs_yearly <- calculate_fft_coefs(transform_func(yearly_smooth))
-  
-    a1_regression <- c(rep(0, n_covars),
-                       coefs_yearly[1:(n_yearly*2), 1])
+    a1_regression <- c(rep(0, n_covars))
+    
+    if (n_day_of_year > 0) {
+      yearly_smooth <- calculate_doy_average(df, yearly_prior_col)
+      coefs_yearly <- calculate_fft_coefs(transform_func(yearly_smooth),
+                                          n_coefs = n_day_of_year)
+      a1_regression <- c(a1_regression, coefs_yearly[, 1])
+    }
+    
+    if (n_hour_of_day > 0) {
+      hourly_smooth <- calculate_hod_average(df, yearly_prior_col)
+      coefs_hourly <- calculate_fft_coefs(transform_func(hourly_smooth), 
+                                          n_coefs = n_hour_of_day)
+      a1_regression <- c(a1_regression, coefs_hourly[, 1])
+    }
   }
   if (is.null(P1_regression)) {
     P1_regression <- matrix(0, nrow=n_covars_total, ncol=n_covars_total)
@@ -243,7 +282,7 @@ fit_univariate <- function(df,
   }
   
   mod <- SSModel(transform_func(df[[y_col]]) ~ 
-                 SSMtrend(1, 
+                 SSMtrend(trend_degree, 
                           a1 = a1_level,
                           P1 = P1_level,
                           P1inf = P1inf_level,
@@ -252,19 +291,36 @@ fit_univariate <- function(df,
                                a1=a1_regression,
                                P1=P1_regression,
                                P1inf = P1inf_regression,
+                               remove.intercept = remove_intercept,
                                data=df, Q=Q_regression),
                   H=H)
-   state_names <- c(
-    "Temperature", "WindSpeed", "WindX", "WindY"
-  )
-  
-  if (!is.null(intervention_date)) {
-    state_names <- c(state_names, "intervention")
-  }
-  state_names <- c(state_names, 
-                   paste0(paste0("yearly_", rep(c("sin", "cos"), n_yearly)), rep(1:n_yearly, each=2)),
-                   'level')
-  mod <- rename_states(mod, state_names)
+  #state_names <- c(
+  #  "Temperature", "WindSpeed", "WindX", "WindY"
+  #)
+  #
+  #if (!is.null(intervention_date)) {
+  #  state_names <- c(state_names, "intervention")
+  #}
+  #if (!remove_intercept) {
+  #  state_names <- c("intercept", state_names)
+  #}
+  #if (n_day_of_year > 0) {
+  #  state_names <- c(state_names, 
+  #                   paste0(paste0("yearly_", rep(c("sin", "cos"), n_day_of_year)), 
+  #                          rep(1:n_day_of_year, each=2)))
+  #}
+  #if (n_hour_of_day > 0) {
+  #  state_names <- c(state_names, 
+  #                   paste0(paste0("hourly_", rep(c("sin", "cos"), n_hour_of_day)), 
+  #                          rep(1:n_hour_of_day, each=2))
+  #                  )
+  #  
+  #}
+  #state_names <- c(state_names, 'level')
+  #if (slope) {
+  #  state_names <- c(state_names, 'slope')
+  #}
+  #mod <- rename_states(mod, state_names)
   
   n_nas <- sum(is.na(mod$Q)) + sum(is.na(mod$H))
   if (n_nas > 0) {
@@ -277,6 +333,7 @@ fit_univariate <- function(df,
   }
   mod
 }
+
 manual_filter <- function(model,
                           df,
                           first_date,
