@@ -15,12 +15,12 @@ SITES <- list(
 load_data <- function(site) {
   tmp_fn <- "tmp.RData"
   base_url <-
-    sprintf("https://uk-air.defra.gov.uk/openair/R_data/%s_2023.RData",
+    sprintf("https://uk-air.defra.gov.uk/openair/R_data/%s_2024.RData",
             site)
   download.file(base_url, tmp_fn, method = "wget")
   load(tmp_fn)
   # Load hourly data
-  df <- get(sprintf("%s_2023", site)) %>%
+  df <- get(sprintf("%s_2024", site)) %>%
     as_tibble() %>%
     mutate(date = as_datetime(date)) %>%
     select(site, code, date, no2 = NO2, air_temp = temp, ws, wd)
